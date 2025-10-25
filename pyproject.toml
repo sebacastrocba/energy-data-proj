@@ -1,18 +1,31 @@
 [project]
-name = "pda-project"
+name = "enery-price-pipeline"
 version = "0.1.0"
-description = ""
+description = "ETL pipeline for energy prices data"
 authors = [
-    {name = "sebacastrocba",email = "scastro@unc.edu.ar"}
+    {name = "Sebastian J. Castro",email = "sebastiancastrofragueiro@gmail.com"}
 ]
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "pandas (>=2.3.3,<3.0.0)",
+    "yfinance (>=0.2.66,<0.3.0)",
+    "requests (>=2.32.5,<3.0.0)",
+    "psycopg2-binary (>=2.9.11,<3.0.0)",
+    "sqlalchemy (>=2.0.44,<3.0.0)",
+    "pyarrow (>=22.0.0,<23.0.0)"
 ]
 
 [tool.poetry]
 packages = [{include = "pda_project", from = "src"}]
 
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.4.2"
+pytest-cov = "^7.0.0"
+black = "^25.9.0"
+flake8 = "^7.3.0"
+mypy = "^1.18.2"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
