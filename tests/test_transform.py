@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from pda_project.transform import clean_brent_price
+from fuel_price.transform import clean_brent_price
 
 def test_clean_brent_removes_nulls():
     """

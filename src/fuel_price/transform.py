@@ -35,7 +35,7 @@ def clean_brent_price(df: pd.DataFrame) -> pd.DataFrame:
 
 # Probar la función
 if __name__ == "__main__":
-    from pda_project.extract import extract_brent_prices
+    from fuel_price.extract import extract_brent_prices
 
     raw_df = extract_brent_prices()
     clean_df = clean_brent_price(raw_df)

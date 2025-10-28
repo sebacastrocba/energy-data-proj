@@ -1,7 +1,7 @@
 [project]
-name = "enery-price-pipeline"
+name = "fuel-price-pipeline"
 version = "0.1.0"
-description = "ETL pipeline for energy prices data"
+description = "ETL pipeline for fuel prices data"
 authors = [
     {name = "Sebastian J. Castro",email = "sebastiancastrofragueiro@gmail.com"}
 ]
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [tool.poetry]
-packages = [{include = "pda_project", from = "src"}]
+packages = [{include = "fuel_price", from = "src"}]
 
 
 [tool.poetry.group.dev.dependencies]
@@ -26,6 +26,8 @@ pytest-cov = "^7.0.0"
 black = "^25.9.0"
 flake8 = "^7.3.0"
 mypy = "^1.18.2"
+pytest-mock = "^3.15.1"
+responses = "^0.25.8"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
