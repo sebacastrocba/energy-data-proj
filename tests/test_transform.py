@@ -3,9 +3,7 @@
 import pytest
 import pandas as pd
 import numpy as np
-from datetime import datetime
-from unittest.mock import patch, MagicMock
-from pathlib import Path
+from unittest.mock import patch
 
 from fuel_price.transform import (
     # Brent

@@ -3,6 +3,7 @@ name: CI
 permissions:
   contents: read
   pull-requests: write
+  checks: write
 
 on:
   push:
@@ -96,7 +97,7 @@ jobs:
       run: poetry run black --check src/ tests/
     
     - name: Lint with Flake8
-      run: poetry run flake8 src/ tests/ --max-line-length=100 --extend-ignore=E203,W503
+      run: poetry run flake8 src/ tests/
     
     - name: Type check with MyPy
       run: poetry run mypy src/ --ignore-missing-imports

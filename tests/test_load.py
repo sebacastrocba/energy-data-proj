@@ -2,8 +2,7 @@
 
 import pytest
 import pandas as pd
-from unittest.mock import Mock, MagicMock, patch, call
-from datetime import datetime, date
+from unittest.mock import MagicMock, patch
 import psycopg2
 
 from fuel_price.load import (

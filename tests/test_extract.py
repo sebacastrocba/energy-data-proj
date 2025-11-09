@@ -4,10 +4,8 @@ import pytest
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
-from unittest.mock import Mock, patch, MagicMock
-import subprocess
+from unittest.mock import Mock, patch
 import requests
-
 from fuel_price.extract import (
     get_today_date,
     find_csv_files,

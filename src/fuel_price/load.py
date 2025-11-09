@@ -50,9 +50,10 @@ def get_postgres_connection(
     }
 
     try:
-        logger.info(
-            f"Conectando a PostgreSQL: {connection_params['host']}:{connection_params['port']}/{connection_params['database']}"
-        )
+        host = connection_params['host']
+        port = connection_params['port']
+        db = connection_params['database']
+        logger.info(f"Conectando a PostgreSQL: {host}:{port}/{db}")
         conn = psycopg2.connect(**connection_params)
         logger.info("Conexion exitosa a PostgreSQL")
         return conn
@@ -125,7 +126,7 @@ def load_brent_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
         insert_query = """
             INSERT INTO staging.brent_prices (date, brent_price_usd)
             VALUES %s
-            ON CONFLICT (date) DO UPDATE 
+            ON CONFLICT (date) DO UPDATE
             SET brent_price_usd = EXCLUDED.brent_price_usd,
                 load_timestamp = CURRENT_TIMESTAMP;
         """
@@ -209,10 +210,12 @@ def load_fuel_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
         buffer.seek(0)
 
         logger.info("Ejecutando COPY para inserción masiva...")
-        cursor.copy_expert(
-            sql=f"COPY staging.fuel_prices ({', '.join(required_cols)}) FROM STDIN WITH (FORMAT CSV, DELIMITER E'\\t', NULL '\\N')",
-            file=buffer,
+        cols = ', '.join(required_cols)
+        copy_sql = (
+            f"COPY staging.fuel_prices ({cols}) FROM STDIN "
+            "WITH (FORMAT CSV, DELIMITER E'\\t', NULL '\\N')"
         )
+        cursor.copy_expert(sql=copy_sql, file=buffer)
 
         conn.commit()
         rows_inserted = len(df_copy)
@@ -277,10 +280,10 @@ def load_usd_ars_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
         # Construir query dinámicamente según columnas disponibles
         if "brecha_cambiaria_pct" in df.columns:
             insert_query = """
-                INSERT INTO staging.usd_ars_rates 
+                INSERT INTO staging.usd_ars_rates
                 (fecha, usd_ars_oficial, usd_ars_blue, brecha_cambiaria_pct)
                 VALUES %s
-                ON CONFLICT (fecha) DO UPDATE 
+                ON CONFLICT (fecha) DO UPDATE
                 SET usd_ars_oficial = EXCLUDED.usd_ars_oficial,
                     usd_ars_blue = EXCLUDED.usd_ars_blue,
                     brecha_cambiaria_pct = EXCLUDED.brecha_cambiaria_pct,
@@ -288,10 +291,10 @@ def load_usd_ars_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
             """
         else:
             insert_query = """
-                INSERT INTO staging.usd_ars_rates 
+                INSERT INTO staging.usd_ars_rates
                 (fecha, usd_ars_oficial, usd_ars_blue)
                 VALUES %s
-                ON CONFLICT (fecha) DO UPDATE 
+                ON CONFLICT (fecha) DO UPDATE
                 SET usd_ars_oficial = EXCLUDED.usd_ars_oficial,
                     usd_ars_blue = EXCLUDED.usd_ars_blue,
                     load_timestamp = CURRENT_TIMESTAMP;
@@ -365,10 +368,10 @@ def load_brent_to_analytics(df: pd.DataFrame, truncate: bool = True) -> int:
         records_list = df_copy.values.tolist()
 
         insert_query = """
-            INSERT INTO analytics.brent_prices_monthly 
+            INSERT INTO analytics.brent_prices_monthly
             (year, month, avg_brent_price_usd, min_brent_price_usd, max_brent_price_usd, record_count)
             VALUES %s
-            ON CONFLICT (year, month) DO UPDATE 
+            ON CONFLICT (year, month) DO UPDATE
             SET avg_brent_price_usd = EXCLUDED.avg_brent_price_usd,
                 min_brent_price_usd = EXCLUDED.min_brent_price_usd,
                 max_brent_price_usd = EXCLUDED.max_brent_price_usd,
@@ -442,10 +445,10 @@ def load_fuel_to_analytics(df: pd.DataFrame, truncate: bool = True) -> int:
         records_list = df_copy.values.tolist()
 
         insert_query = """
-            INSERT INTO analytics.fuel_prices_monthly 
+            INSERT INTO analytics.fuel_prices_monthly
             (year, month, provincia, bandera, producto, precio_surtidor_mediana, volumen_total)
             VALUES %s
-            ON CONFLICT (year, month, provincia, bandera, producto) DO UPDATE 
+            ON CONFLICT (year, month, provincia, bandera, producto) DO UPDATE
             SET precio_surtidor_mediana = EXCLUDED.precio_surtidor_mediana,
                 volumen_total = EXCLUDED.volumen_total,
                 load_timestamp = CURRENT_TIMESTAMP;
@@ -516,10 +519,10 @@ def load_usd_ars_to_analytics(df: pd.DataFrame, truncate: bool = True) -> int:
         records_list = df_copy.values.tolist()
 
         insert_query = """
-            INSERT INTO analytics.usd_ars_rates_monthly 
+            INSERT INTO analytics.usd_ars_rates_monthly
             (year, month, avg_usd_ars_oficial, avg_usd_ars_blue, avg_brecha_cambiaria_pct, record_count)
             VALUES %s
-            ON CONFLICT (year, month) DO UPDATE 
+            ON CONFLICT (year, month) DO UPDATE
             SET avg_usd_ars_oficial = EXCLUDED.avg_usd_ars_oficial,
                 avg_usd_ars_blue = EXCLUDED.avg_usd_ars_blue,
                 avg_brecha_cambiaria_pct = EXCLUDED.avg_brecha_cambiaria_pct,
