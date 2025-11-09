@@ -86,7 +86,7 @@ poetry run python -m fuel_price.extract
 poetry run python -m fuel_price.transform
 
 # Paso 3: Cargar a PostgreSQL
-poetry run python load_example.py
+poetry run python -m fuel_price.load
 ```
 
 ### Opción 3: Usar como Librería
