@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # Servicio de PostgreSQL
+  postgres:
+    image: postgres:15-alpine        
+    container_name: fuel_prices_db   
+    restart: unless-stopped          
+    
+    environment:
+      POSTGRES_USER: fuel_user       
+      POSTGRES_PASSWORD: fuel_pass   
+      POSTGRES_DB: fuel_prices_db    
+    
+    ports:
+      - "15432:5432"
+    
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init_db:/docker-entrypoint-initdb.d
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fuel_user -d fuel_prices_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# Volumen para persistir los datos
+volumes:
+  postgres_data:
+    driver: local

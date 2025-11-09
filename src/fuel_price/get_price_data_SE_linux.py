@@ -153,6 +153,62 @@ def process_access_db_with_mdbtools(db_file_path, data_path):
     print("-" * 70)
     return csv_files
 
+def concatenate_csv_files(csv_files, data_path):
+    """
+    Concatena los dos archivos CSV principales de precios en uno solo
+    
+    Args:
+        csv_files: Lista de archivos CSV generados
+        data_path: Directorio donde guardar el archivo concatenado
+        
+    Returns:
+        Path al archivo concatenado o None si falló
+    """
+    print("\n" + "="*70)
+    print("CONCATENANDO ARCHIVOS CSV")
+    print("="*70)
+    
+    # Filtrar solo los archivos que contienen datos de precios (public)
+    price_files = [f for f in csv_files if 'public' in f.name.lower()]
+    
+    if len(price_files) < 2:
+        print(f"No se encontraron suficientes archivos para concatenar (encontrados: {len(price_files)})")
+        return None
+    
+    print(f"Archivos a concatenar: {len(price_files)}")
+    for f in price_files:
+        print(f"   • {f.name}")
+    
+    try:
+        # Leer los archivos CSV
+        dataframes = []
+        for csv_file in price_files:
+            print(f"\nLeyendo: {csv_file.name}")
+            df = pd.read_csv(csv_file)
+            print(f"   Registros: {len(df):,}")
+            print(f"   Columnas: {len(df.columns)}")
+            dataframes.append(df)
+        
+        # Concatenar
+        print("\nConcatenando datos...")
+        df_concatenated = pd.concat(dataframes, ignore_index=True)
+        
+        # Guardar archivo concatenado
+        output_file = data_path / "precios_eess_completo.csv"
+        df_concatenated.to_csv(output_file, index=False)
+        
+        print(f"\n✓ Archivo concatenado creado exitosamente")
+        print(f"   Nombre: {output_file.name}")
+        print(f"   Registros totales: {len(df_concatenated):,}")
+        print(f"   Columnas: {len(df_concatenated.columns)}")
+        print(f"   Tamaño: {output_file.stat().st_size / (1024*1024):.2f} MB")
+        
+        return output_file
+        
+    except Exception as e:
+        print(f"Error al concatenar archivos: {e}")
+        return None
+
 def main():
     """
     Función principal
@@ -197,7 +253,10 @@ def main():
         csv_files = process_access_db_with_mdbtools(accdb_file, data_path)
         all_csv_files.extend(csv_files)
     
-    # 4. Resumen final
+    # 4. Concatenar archivos CSV
+    concatenated_file = concatenate_csv_files(all_csv_files, data_path)
+    
+    # 5. Resumen final
     print("\n" + "="*70)
     print("PROCESO COMPLETADO")
     print("="*70)
@@ -208,6 +267,9 @@ def main():
         for csv_file in all_csv_files:
             size_kb = csv_file.stat().st_size / 1024
             print(f"   • {csv_file.name} ({size_kb:.2f} KB)")
+        
+        if concatenated_file:
+            print(f"\n✓ Archivo concatenado: {concatenated_file.name}")
 
         print(f"\nUbicación: {data_path}")
         print("\nDatos listos para usar")
