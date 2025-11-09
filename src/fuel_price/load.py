@@ -50,9 +50,9 @@ def get_postgres_connection(
     }
 
     try:
-        host = connection_params['host']
-        port = connection_params['port']
-        db = connection_params['database']
+        host = connection_params["host"]
+        port = connection_params["port"]
+        db = connection_params["database"]
         logger.info(f"Conectando a PostgreSQL: {host}:{port}/{db}")
         conn = psycopg2.connect(**connection_params)
         logger.info("Conexion exitosa a PostgreSQL")
@@ -210,7 +210,7 @@ def load_fuel_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
         buffer.seek(0)
 
         logger.info("Ejecutando COPY para inserción masiva...")
-        cols = ', '.join(required_cols)
+        cols = ", ".join(required_cols)
         copy_sql = (
             f"COPY staging.fuel_prices ({cols}) FROM STDIN "
             "WITH (FORMAT CSV, DELIMITER E'\\t', NULL '\\N')"
