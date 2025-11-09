@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 from unittest.mock import Mock, patch, MagicMock
 import subprocess
+import requests
 
 from fuel_price.extract import (
     get_today_date,
@@ -15,6 +16,7 @@ from fuel_price.extract import (
     run_download_script,
     extract_brent_prices,
     extract_fuel_prices,
+    extract_dolar_bluelytics,
     extract_all_data
 )
 
@@ -107,8 +109,8 @@ class TestExtractBrentPrices:
         # Verificaciones
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 3
-        assert list(result.columns) == ["date", "brent_price"]
-        assert result["brent_price"].tolist() == [80.5, 81.2, 82.0]
+        assert list(result.columns) == ["date", "brent_price_usd"]
+        assert result["brent_price_usd"].tolist() == [80.5, 81.2, 82.0]
         
         # Verificar que se guardó el archivo
         saved_file = tmp_path / "brent_prices.csv"
@@ -241,48 +243,190 @@ class TestExtractFuelPrices:
 
 
 # ============================================================================
+# Tests para extract_dolar_bluelytics
+# ============================================================================
+
+class TestExtractDolarBluelytics:
+    """Tests para la función extract_dolar_bluelytics."""
+    
+    @patch("fuel_price.extract.requests.get")
+    def test_extract_dolar_bluelytics_success(self, mock_get, tmp_path):
+        """Test extracción exitosa de cotización USD/ARS."""
+        # Mock de respuesta de API - usando fechas simples sin timezone
+        mock_response = Mock()
+        mock_response.json.return_value = [
+            {
+                "date": "2024-01-01",
+                "source": "Oficial",
+                "value_buy": 800.0,
+                "value_sell": 900.0
+            },
+            {
+                "date": "2024-01-01",
+                "source": "Blue",
+                "value_buy": 950.0,
+                "value_sell": 1050.0
+            },
+            {
+                "date": "2024-01-02",
+                "source": "Oficial",
+                "value_buy": 810.0,
+                "value_sell": 910.0
+            },
+            {
+                "date": "2024-01-02",
+                "source": "Blue",
+                "value_buy": 960.0,
+                "value_sell": 1060.0
+            }
+        ]
+        mock_get.return_value = mock_response
+        
+        # Ejecutar
+        result = extract_dolar_bluelytics(
+            start_date="2024-01-01",
+            end_date="2024-01-02",
+            tipos=['oficial', 'blue'],
+            output_path=tmp_path
+        )
+        
+        # Verificaciones
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 2
+        assert "fecha" in result.columns
+        assert "usd_ars_oficial" in result.columns
+        assert "usd_ars_blue" in result.columns
+        assert "brecha_cambiaria_pct" in result.columns
+        
+        # Verificar que se guardó el archivo
+        saved_file = tmp_path / "usd_ars_bluelytics.csv"
+        assert saved_file.exists()
+        
+        # Verificar llamada a API
+        mock_get.assert_called_once_with(
+            "https://api.bluelytics.com.ar/v2/evolution.json",
+            timeout=30
+        )
+    
+    @patch("fuel_price.extract.requests.get")
+    def test_extract_dolar_bluelytics_only_oficial(self, mock_get, tmp_path):
+        """Test extracción solo con tipo oficial."""
+        mock_response = Mock()
+        mock_response.json.return_value = [
+            {
+                "date": "2024-01-01",
+                "source": "Oficial",
+                "value_buy": 800.0,
+                "value_sell": 900.0
+            }
+        ]
+        mock_get.return_value = mock_response
+        
+        result = extract_dolar_bluelytics(
+            start_date="2024-01-01",
+            end_date="2024-01-01",
+            tipos=['oficial'],
+            output_path=tmp_path
+        )
+        
+        assert "usd_ars_oficial" in result.columns
+        assert "usd_ars_blue" not in result.columns
+    
+    @patch("fuel_price.extract.requests.get")
+    def test_extract_dolar_bluelytics_api_error(self, mock_get, tmp_path):
+        """Test que levanta error cuando falla la API."""
+        mock_get.side_effect = requests.exceptions.RequestException("API Error")
+        
+        with pytest.raises(ValueError, match="Error al obtener datos de Bluelytics"):
+            extract_dolar_bluelytics(
+                start_date="2024-01-01",
+                end_date="2024-01-01",
+                output_path=tmp_path
+            )
+    
+    @patch("fuel_price.extract.requests.get")
+    @patch("fuel_price.extract.get_today_date")
+    def test_extract_dolar_bluelytics_with_defaults(self, mock_today, mock_get, tmp_path):
+        """Test que usa fecha de hoy por defecto."""
+        mock_today.return_value = "2024-12-31"
+        mock_response = Mock()
+        mock_response.json.return_value = [
+            {
+                "date": "2024-01-01",
+                "source": "Oficial",
+                "value_buy": 800.0,
+                "value_sell": 900.0
+            }
+        ]
+        mock_get.return_value = mock_response
+        
+        with patch("fuel_price.extract.get_default_data_path", return_value=tmp_path):
+            result = extract_dolar_bluelytics(start_date="2024-01-01")
+        
+        # Verificar que procesó correctamente
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 1
+
+
+# ============================================================================
 # Tests para extract_all_data
 # ============================================================================
 
 class TestExtractAllData:
     """Tests para la función extract_all_data."""
     
+    @patch("fuel_price.extract.extract_dolar_bluelytics")
     @patch("fuel_price.extract.extract_fuel_prices")
     @patch("fuel_price.extract.extract_brent_prices")
-    def test_extract_all_data_success(self, mock_brent, mock_fuel):
+    def test_extract_all_data_success(self, mock_brent, mock_fuel, mock_dolar):
         """Test extracción completa de todas las fuentes."""
         # Mock de datos
         brent_df = pd.DataFrame({
             "date": ["2024-01-01", "2024-01-02"],
-            "brent_price": [80.5, 81.2]
+            "brent_price_usd": [80.5, 81.2]
         })
         fuel_df = pd.DataFrame({
             "fecha": ["2024-01-01"],
             "precio": [100]
         })
+        dolar_df = pd.DataFrame({
+            "fecha": pd.to_datetime(["2024-01-01"]),
+            "usd_ars_oficial": [850.0],
+            "usd_ars_blue": [1000.0],
+            "brecha_cambiaria_pct": [17.65]
+        })
         
         mock_brent.return_value = brent_df
         mock_fuel.return_value = fuel_df
+        mock_dolar.return_value = dolar_df
         
         # Ejecutar
-        result_brent, result_fuel = extract_all_data()
+        result_brent, result_fuel, result_dolar = extract_all_data()
         
         # Verificaciones
         assert isinstance(result_brent, pd.DataFrame)
         assert isinstance(result_fuel, pd.DataFrame)
+        assert isinstance(result_dolar, pd.DataFrame)
         assert len(result_brent) == 2
         assert len(result_fuel) == 1
+        assert len(result_dolar) == 1
         
-        # Verificar que se llamaron ambas funciones
+        # Verificar que se llamaron las tres funciones
         mock_brent.assert_called_once()
         mock_fuel.assert_called_once()
+        mock_dolar.assert_called_once()
     
+    @patch("fuel_price.extract.extract_dolar_bluelytics")
     @patch("fuel_price.extract.extract_fuel_prices")
     @patch("fuel_price.extract.extract_brent_prices")
-    def test_extract_all_data_with_custom_parameters(self, mock_brent, mock_fuel, tmp_path):
+    def test_extract_all_data_with_custom_parameters(self, mock_brent, mock_fuel, mock_dolar, tmp_path):
         """Test con parámetros personalizados."""
-        mock_brent.return_value = pd.DataFrame({"date": ["2024-01-01"], "brent_price": [80.5]})
+        mock_brent.return_value = pd.DataFrame({"date": ["2024-01-01"], "brent_price_usd": [80.5]})
         mock_fuel.return_value = pd.DataFrame({"fecha": ["2024-01-01"], "precio": [100]})
+        mock_dolar.return_value = pd.DataFrame({
+            "fecha": pd.to_datetime(["2024-01-01"]),
+            "usd_ars_oficial": [850.0]
+        })
         
         extract_all_data(
             brent_start_date="2023-01-01",
@@ -301,27 +445,40 @@ class TestExtractAllData:
             data_path=tmp_path,
             update_data=False
         )
+        mock_dolar.assert_called_once_with(
+            start_date="2023-01-01",
+            end_date="2024-12-31",
+            tipos=['oficial', 'blue'],
+            output_path=tmp_path
+        )
     
+    @patch("fuel_price.extract.extract_dolar_bluelytics")
     @patch("fuel_price.extract.extract_fuel_prices")
     @patch("fuel_price.extract.extract_brent_prices")
     @patch("fuel_price.extract.get_today_date")
-    def test_extract_all_data_prints_summary(self, mock_date, mock_brent, mock_fuel, capsys):
+    def test_extract_all_data_prints_summary(self, mock_date, mock_brent, mock_fuel, mock_dolar, capsys):
         """Test que imprime resumen correcto."""
         mock_date.return_value = "2024-11-01"
         mock_brent.return_value = pd.DataFrame({
             "date": ["2024-01-01", "2024-01-02"],
-            "brent_price": [80.5, 81.2]
+            "brent_price_usd": [80.5, 81.2]
         })
         mock_fuel.return_value = pd.DataFrame({
             "fecha": ["2024-01-01"],
             "precio": [100]
         })
+        mock_dolar.return_value = pd.DataFrame({
+            "fecha": pd.to_datetime(["2024-01-01"]),
+            "usd_ars_oficial": [850.0],
+            "usd_ars_blue": [1000.0],
+            "brecha_cambiaria_pct": [17.65]
+        })
         
         extract_all_data()
         
         captured = capsys.readouterr()
-        assert "Actualizando todas las fuentes de datos" in captured.out
-        assert "ACTUALIZACIÓN COMPLETADA" in captured.out
+        assert "EXTRACCIÓN COMPLETA" in captured.out
+        assert "EXTRACCIÓN COMPLETADA EXITOSAMENTE" in captured.out
         assert "2024-11-01" in captured.out
         assert "Registros: 2" in captured.out  # Brent
-        assert "Registros: 1" in captured.out  # Fuel
+        assert "Registros: 1" in captured.out  # Fuel y Dolar

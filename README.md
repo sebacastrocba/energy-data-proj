@@ -1,5 +1,9 @@
 # Análisis de Precios de Combustibles en Argentina
 
+![CI](https://github.com/sebacastrocba/energy-data-proj/workflows/CI/badge.svg)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/release/python-3120/)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+
 ## Descripción del Proyecto
 
 Este proyecto implementa un pipeline de datos (ETL/ELT) que extrae, transforma y carga información sobre precios de combustibles en Argentina, combinándola con datos del precio internacional del petróleo Brent. El objetivo es analizar la correlación entre los precios locales y el mercado internacional de petróleo.
@@ -12,7 +16,8 @@ Este proyecto implementa un pipeline de datos (ETL/ELT) que extrae, transforma y
 - ✅ **Transformación y limpieza** de datos con pandas
 - ✅ **Carga a PostgreSQL** con Docker Compose (schemas staging y analytics)
 - ✅ **Análisis exploratorio** con Jupyter notebooks
-- ✅ **Tests automatizados** con pytest
+- ✅ **Tests automatizados** con pytest (67 tests)
+- ✅ **CI/CD con GitHub Actions** (tests + linting)
 - ✅ **Gestión de dependencias** con Poetry
 
 ## 🚀 Inicio Rápido

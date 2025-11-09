@@ -1,0 +1,102 @@
+name: CI
+
+permissions:
+  contents: read
+  pull-requests: write
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'feature/**'
+  pull_request:
+    branches: 
+      - main
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: fuel_price_test
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: latest
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+    
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+    
+    - name: Install dependencies
+      run: poetry install --no-interaction
+    
+    - name: Setup database
+      env:
+        PGPASSWORD: test_password
+      run: |
+        psql -h localhost -U test_user -d fuel_price_test -f init_db/01_init_schema.sql
+    
+    - name: Run tests
+      env:
+        POSTGRES_HOST: localhost
+        POSTGRES_PORT: 5432
+        POSTGRES_DB: fuel_price_test
+        POSTGRES_USER: test_user
+        POSTGRES_PASSWORD: test_password
+      run: |
+        poetry run pytest tests/ -v
+
+  lint:
+    name: Linting
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+    
+    - name: Install dependencies
+      run: poetry install --no-interaction
+    
+    - name: Check code formatting with Black
+      run: poetry run black --check src/ tests/
+    
+    - name: Lint with Flake8
+      run: poetry run flake8 src/ tests/ --max-line-length=100 --extend-ignore=E203,W503
+    
+    - name: Type check with MyPy
+      run: poetry run mypy src/ --ignore-missing-imports
