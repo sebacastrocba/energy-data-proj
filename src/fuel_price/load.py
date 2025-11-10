@@ -50,8 +50,8 @@ def get_postgres_connection(
     }
 
     try:
-        host = connection_params["host"]
-        port = connection_params["port"]
+        host = str(connection_params["host"])
+        port = int(connection_params["port"])  # type: ignore[call-overload]
         db = connection_params["database"]
         logger.info(f"Conectando a PostgreSQL: {host}:{port}/{db}")
         conn = psycopg2.connect(**connection_params)
