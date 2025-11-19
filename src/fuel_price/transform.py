@@ -8,11 +8,7 @@ from typing import Optional, List, Dict, Tuple, Callable
 from functools import wraps
 import time
 import logging
-
-if __name__ == "__main__":
-    from config import PRODUCTO_MAP, COLUMNAS_RELEVANTES
-else:
-    from .config import PRODUCTO_MAP, COLUMNAS_RELEVANTES
+from fuel_price.config import PRODUCTO_MAP, COLUMNAS_RELEVANTES
 
 # Configurar logging
 logging.basicConfig(
@@ -35,6 +31,41 @@ def timer(func: Callable) -> Callable:
     return wrapper
 
 
+def save_to_parquet(
+    df: pd.DataFrame,
+    output_path: Path,
+    filename: str,
+    partition_cols: Optional[List[str]] = None,
+) -> Path:
+    """
+    Guarda DataFrame en formato Parquet para staging.
+
+    Args:
+        df: DataFrame a guardar
+        output_path: Directorio de salida
+        filename: Nombre del archivo
+        partition_cols: Columnas para particionar (opcional)
+
+    Returns:
+        Path al archivo guardado
+    """
+    output_path.mkdir(parents=True, exist_ok=True)
+    file_path = output_path / f"{filename}.parquet"
+
+    df.to_parquet(
+        file_path,
+        engine="pyarrow",
+        compression="snappy",
+        index=False,
+        partition_cols=partition_cols,
+    )
+
+    logger.info(f"Datos guardados en: {file_path}")
+    logger.info(f"Tamaño: {file_path.stat().st_size / 1024 / 1024:.2f} MB")
+
+    return file_path
+
+
 #######################################################################################
 # Transformaciones para datos de precios del Brent
 ########################################################################################
@@ -43,138 +74,37 @@ def timer(func: Callable) -> Callable:
 @timer
 def clean_brent_price(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Limpia y transforma el DataFrame de precios del petróleo Brent.
+    Limpia datos de Brent leídos desde CSV.
 
-    Args:
-        df (pd.DataFrame): DataFrame con los datos originales.
-
-    Returns:
-        pd.DataFrame: DataFrame limpio y transformado.
+    - Convierte date a datetime
+    - Asegura que precio sea float
+    - Renombra columna para consistencia
     """
-    logger.info(f"Iniciando limpieza de Brent - Registros iniciales: {len(df):,}")
-
-    # Copiar el DataFrame para no modificar el original
+    logger.info("Iniciando limpieza de Brent")
     cleaned_df = df.copy()
-    initial_count = len(cleaned_df)
 
-    # 1. Eliminar filas con valores nulos
-    cleaned_df = cleaned_df.dropna()
-    nulls_removed = initial_count - len(cleaned_df)
-    if nulls_removed > 0:
-        logger.info(f"  Eliminados {nulls_removed:,} registros con valores nulos")
-
-    # 2. Asegurarse de que la columna 'date' sea de tipo datetime (o renombrar si es necesario)
-    if "Date" in cleaned_df.columns:
-        cleaned_df = cleaned_df.rename(columns={"Date": "date"})
-        logger.debug("  Columna 'Date' renombrada a 'date'")
+    # Conversión de tipos (necesario después de leer CSV)
     cleaned_df["date"] = pd.to_datetime(cleaned_df["date"])
-
-    # 3. Asegurarse de que la columna de precio sea de tipo float (renombrar si es necesario)
-    if "brent_price_usd" in cleaned_df.columns:
-        cleaned_df = cleaned_df.rename(columns={"brent_price_usd": "brent_price"})
-        logger.debug("  Columna 'brent_price_usd' renombrada a 'brent_price'")
     cleaned_df["brent_price"] = cleaned_df["brent_price"].astype(float)
 
-    # 4. Eliminar duplicados
-    before_dedup = len(cleaned_df)
-    cleaned_df = cleaned_df.drop_duplicates(subset=["date"])
-    dupes_removed = before_dedup - len(cleaned_df)
-    if dupes_removed > 0:
-        logger.info(f"  Eliminados {dupes_removed:,} duplicados")
-
-    # 5. Ordenar por fecha
-    cleaned_df = cleaned_df.sort_values(by="date").reset_index(drop=True)
-
-    logger.info(f"Limpieza completada - Registros finales: {len(cleaned_df):,}")
-    logger.info(
-        f"  Rango: {cleaned_df['date'].min().date()} a {cleaned_df['date'].max().date()}"
-    )
+    logger.info("Limpieza de Brent completada")
 
     return cleaned_df
 
 
 @timer
-def agg_brent_price(
-    df: pd.DataFrame, freq: str = "M", agg_func: Callable = np.mean
-) -> pd.DataFrame:
+def agg_brent_price(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Realiza agregaciones en el DataFrame de precios del petróleo Brent.
-
-    Args:
-        df (pd.DataFrame): DataFrame con los datos originales.
-        freq (str): Frecuencia de agregación ('M' para mensual, 'Q' para trimestral, etc.).
-        agg_func (Callable): Función de agregación (por defecto np.mean).
-
-    Returns:
-        pd.DataFrame: DataFrame con las agregaciones realizadas.
+    Agrega datos diarios de Brent a nivel mensual (promedio).
     """
-    freq_map = {
-        "D": "diaria",
-        "W": "semanal",
-        "M": "mensual",
-        "Q": "trimestral",
-        "Y": "anual",
-    }
-    freq_name = freq_map.get(freq, freq)
-
-    logger.info(f"Agregando datos de Brent - Frecuencia: {freq_name}")
-
-    # Hacer una copia para no modificar el DataFrame original
-    df = df.copy()
-
-    # Asegurarse de que la columna 'date' sea de tipo datetime
-    df["date"] = pd.to_datetime(df["date"])
-
-    # Establecer 'date' como índice
-    df.set_index("date", inplace=True)
-
-    # Realizar la agregación
-    aggregated_df = df.resample(freq).agg({"brent_price": agg_func}).reset_index()
-
-    logger.info(f"Agregación completada - {len(aggregated_df):,} períodos generados")
-
-    return aggregated_df
-
-
-@timer
-def agg_brent_price_for_analytics(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Agrega datos de Brent para la tabla de analytics con estadísticas completas.
-
-    Args:
-        df: DataFrame con columnas ['date', 'brent_price']
-
-    Returns:
-        DataFrame con columnas ['year', 'month', 'avg_brent_price_usd', 'min_brent_price_usd',
-                                'max_brent_price_usd', 'record_count']
-    """
-    logger.info("Agregando datos de Brent para analytics - Frecuencia: mensual")
-
-    # Hacer una copia
-    df = df.copy()
-
-    # Asegurar que date sea datetime
-    df["date"] = pd.to_datetime(df["date"])
-
-    # Extraer year y month
-    df["year"] = df["date"].dt.year
-    df["month"] = df["date"].dt.month
-
-    # Agregar por año y mes
-    aggregated_df = (
-        df.groupby(["year", "month"])
-        .agg(
-            avg_brent_price_usd=("brent_price", "mean"),
-            min_brent_price_usd=("brent_price", "min"),
-            max_brent_price_usd=("brent_price", "max"),
-            record_count=("brent_price", "count"),
-        )
-        .reset_index()
+    logger.info("Agregando datos de Brent - Frecuencia: mensual")
+    df_agg = (
+        df.set_index("date").resample("ME").agg({"brent_price": np.mean}).reset_index()
     )
+    df_agg = df_agg.rename(columns={"brent_price": "avg_brent_price"})
+    logger.info(f"Agregación completada - {len(df_agg):,} meses generados")
 
-    logger.info(f"Agregación completada - {len(aggregated_df):,} períodos generados")
-
-    return aggregated_df
+    return df_agg
 
 
 @timer
@@ -182,12 +112,37 @@ def process_brent_price_data(raw_df: pd.DataFrame) -> pd.DataFrame:
     """
     Pipeline para procesar y transformar datos del precio del Brent
     """
+    logger.info("=" * 70)
+    logger.info("INICIANDO PIPELINE DE BRENT")
+    logger.info("=" * 70)
 
     # Paso 1: Limpiar
     df_cleaned = clean_brent_price(raw_df)
 
     # Paso 2: Transformar y agregar
     df_transformed = agg_brent_price(df_cleaned)
+
+    # Paso 3: Guardar resultados
+    project_root = Path(__file__).parent.parent.parent
+    output_path = project_root / "data" / "processed"
+
+    save_to_parquet(
+        df_cleaned,
+        output_path=output_path,
+        filename="brent_price_cleaned",
+    )
+
+    save_to_parquet(
+        df_transformed,
+        output_path=output_path,
+        filename="brent_price_monthly",
+    )
+
+    logger.info("Datos de Brent guardados en formato Parquet")
+
+    logger.info("\n" + "=" * 70)
+    logger.info("PIPELINE DE BRENT COMPLETADO")
+    logger.info("=" * 70)
 
     return df_transformed
 
@@ -232,6 +187,7 @@ def clean_fuel_price(df: pd.DataFrame) -> pd.DataFrame:
         .str.encode("ascii", errors="ignore")
         .str.decode("utf-8")
     )
+
     logger.debug("  Columnas normalizadas")
 
     # Validar columnas requeridas
@@ -257,6 +213,14 @@ def clean_fuel_price(df: pd.DataFrame) -> pd.DataFrame:
     if nulls_removed > 0:
         logger.info(
             f"  Eliminados {nulls_removed:,} registros con valores nulos en periodo/precio"
+        )
+
+    before_zero_filter = len(cleaned_df)
+    cleaned_df = cleaned_df[cleaned_df["precio_surtidor"] >= 1.0]
+    zeros_removed = before_zero_filter - len(cleaned_df)
+    if zeros_removed > 0:
+        logger.info(
+            f"  Eliminados {zeros_removed:,} registros con precio_surtidor <= 0"
         )
 
     before_dedup = len(cleaned_df)
@@ -320,63 +284,15 @@ def fuel_price_aggs(
 
     df_selected = df[columns_to_keep].copy()
 
-    df_aggregated = df_selected.groupby(
-        ["periodo", "provincia", "bandera", "producto"], as_index=False
-    ).agg(
+    df_aggregated = df_selected.groupby(["periodo", "producto"], as_index=False).agg(
         precio_surtidor_mediana=("precio_surtidor", "median"),
         volumen_total=("volumen", "sum"),
     )
 
-    logger.info(f"Agregación completada - {len(df_aggregated):,} registros agregados")
-    logger.info(f"  Combinaciones únicas:")
-    logger.info(f"     - Periodos: {df_aggregated['periodo'].nunique()}")
-    logger.info(f"     - Provincias: {df_aggregated['provincia'].nunique()}")
-    logger.info(f"     - Banderas: {df_aggregated['bandera'].nunique()}")
-    logger.info(f"     - Productos: {df_aggregated['producto'].nunique()}")
-
+    logger.info(
+        f"Agregación completada - {len(df_aggregated):,} registros agregados a nivel nacional"
+    )
     return df_aggregated
-
-
-@timer
-def fuel_price_aggs_for_analytics(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Agrega datos de combustibles para analytics con year y month.
-
-    Args:
-        df: DataFrame con datos ya agregados de fuel_price_aggs
-
-    Returns:
-        DataFrame con columnas ['year', 'month', 'provincia', 'bandera', 'producto',
-                                'precio_surtidor_mediana', 'volumen_total']
-    """
-    logger.info(f"Preparando datos de combustibles para analytics")
-
-    # Hacer copia
-    df = df.copy()
-
-    # Asegurar que periodo sea datetime
-    df["periodo"] = pd.to_datetime(df["periodo"])
-
-    # Extraer year y month
-    df["year"] = df["periodo"].dt.year
-    df["month"] = df["periodo"].dt.month
-
-    # Seleccionar columnas en el orden correcto
-    result_df = df[
-        [
-            "year",
-            "month",
-            "provincia",
-            "bandera",
-            "producto",
-            "precio_surtidor_mediana",
-            "volumen_total",
-        ]
-    ].copy()
-
-    logger.info(f"Preparación completada - {len(result_df):,} registros")
-
-    return result_df
 
 
 @timer
@@ -401,19 +317,29 @@ def process_fuel_data_pipeline(
     logger.info("\nPASO 1: Limpieza de datos")
     cleaned_df = clean_fuel_price(raw_df)
 
-    # Opcional: Guardar staging
-    if save_staging:
-        logger.info("\nPASO 2: Guardando datos en staging")
-        staging_path = Path(__file__).parent.parent.parent / "data" / "raw"
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        try:
-            save_to_parquet(cleaned_df, staging_path, f"fuel_clean_{timestamp}")
-        except Exception as e:
-            logger.warning(f"  No se pudo guardar staging: {e}")
-
     # Paso 2: Transformar
-    logger.info("\nPASO 3: Agregación de datos")
+    logger.info("\nPASO 2: Agregación de datos")
     transformed_df = fuel_price_aggs(cleaned_df)
+
+    # Paso 3: Guardar
+    if save_staging:
+        logger.info("\nPASO 3: Guardando datos limpios en staging")
+        project_root = Path(__file__).parent.parent.parent
+        output_path = project_root / "data" / "processed"
+
+        save_to_parquet(
+            cleaned_df,
+            output_path=output_path,
+            filename="fuel_price_cleaned",
+        )
+
+        save_to_parquet(
+            transformed_df,
+            output_path=output_path,
+            filename="fuel_price_aggregated",
+        )
+
+        logger.info("Datos de combustibles guardados en formato Parquet")
 
     logger.info("\n" + "=" * 70)
     logger.info("PIPELINE DE COMBUSTIBLES COMPLETADO")
@@ -434,24 +360,18 @@ def clean_dollar_price(df: pd.DataFrame) -> pd.DataFrame:
 
     Args:
         df (pd.DataFrame): DataFrame con los datos originales.
+
+    Returns:
+        pd.DataFrame: DataFrame con la columna date convertida a datetime.
     """
-    logger.info(f"Iniciando limpieza de USD/ARS - Registros iniciales: {len(df):,}")
+    logger.info(
+        f"Iniciando limpieza de datos de dolar Blue y Oficial - Registros iniciales: {len(df):,}"
+    )
 
     df = df.copy()
 
-    # Rename date column
-    df = df.rename(columns={"fecha": "date"})
-    logger.debug("  Columna 'fecha' renombrada a 'date'")
-
-    # Convert date to datetime
+    # Convertir tipo de dato de date
     df["date"] = pd.to_datetime(df["date"], format="%Y-%m-%d", errors="coerce")
-
-    # Remove rows with null dates
-    before_cleaning = len(df)
-    df = df.dropna(subset=["date"])
-    nulls_removed = before_cleaning - len(df)
-    if nulls_removed > 0:
-        logger.info(f"  Eliminados {nulls_removed:,} registros con fechas nulas")
 
     logger.info(f"Limpieza completada - Registros finales: {len(df):,}")
     logger.info(f"  Rango: {df['date'].min().date()} a {df['date'].max().date()}")
@@ -460,87 +380,47 @@ def clean_dollar_price(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @timer
-def dollar_price_aggs(
-    df: pd.DataFrame, freq: str = "M", agg_func: Callable = np.mean
-) -> pd.DataFrame:
+def dollar_price_aggs(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Realiza agregaciones en el DataFrame de precios del dólar Blue y Oficial.
+    Realiza agregaciones mensuales en el DataFrame de precios del dólar Blue y Oficial.
+
+    Pivotea los datos para tener columnas separadas por tipo de cambio y calcula
+    la brecha cambiaria.
 
     Args:
-        df (pd.DataFrame): DataFrame con los datos originales.
-        freq (str): Frecuencia de agregación ('M' para mensual, 'Q' para trimestral, etc.).
-        agg_func (Callable): Función de agregación (por defecto np.mean).
+        df (pd.DataFrame): DataFrame con columnas ['date', 'source', 'value_buy', 'value_sell']
 
     Returns:
-        pd.DataFrame: DataFrame con las agregaciones realizadas.
+        pd.DataFrame: DataFrame con columnas ['date', 'usd_ars_oficial', 'usd_ars_blue', 'brecha_cambiaria_pct']
     """
-    freq_map = {
-        "D": "diaria",
-        "W": "semanal",
-        "M": "mensual",
-        "Q": "trimestral",
-        "Y": "anual",
-    }
-    freq_name = freq_map.get(freq, freq)
+    logger.info("Agregando datos de USD/ARS - Frecuencia: mensual")
 
-    logger.info(f"Agregando datos de USD/ARS - Frecuencia: {freq_name}")
-
-    # Hacer una copia para no modificar el DataFrame original
     df = df.copy()
-
-    # Asegurarse de que la columna 'date' sea de tipo datetime
     df["date"] = pd.to_datetime(df["date"])
 
-    # Establecer 'date' como índice
-    df.set_index("date", inplace=True)
-
-    # Realizar la agregación
-    aggregated_df = df.resample(freq).agg(agg_func).reset_index()
-
-    logger.info(f"Agregación completada - {len(aggregated_df):,} períodos generados")
-
-    return aggregated_df
-
-
-@timer
-def dollar_price_aggs_for_analytics(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Agrega datos de USD/ARS para analytics con year y month.
-
-    Args:
-        df: DataFrame con columnas ['date', 'usd_ars_oficial', 'usd_ars_blue', 'brecha_cambiaria_pct']
-
-    Returns:
-        DataFrame con columnas ['year', 'month', 'avg_usd_ars_oficial', 'avg_usd_ars_blue',
-                                'avg_brecha_cambiaria_pct', 'record_count']
-    """
-    logger.info("Agregando datos de USD/ARS para analytics - Frecuencia: mensual")
-
-    # Hacer copia
-    df = df.copy()
-
-    # Asegurar que date sea datetime
-    df["date"] = pd.to_datetime(df["date"])
-
-    # Extraer year y month
-    df["year"] = df["date"].dt.year
-    df["month"] = df["date"].dt.month
-
-    # Agregar por año y mes
-    aggregated_df = (
-        df.groupby(["year", "month"])
-        .agg(
-            avg_usd_ars_oficial=("usd_ars_oficial", "mean"),
-            avg_usd_ars_blue=("usd_ars_blue", "mean"),
-            avg_brecha_cambiaria_pct=("brecha_cambiaria_pct", "mean"),
-            record_count=("usd_ars_oficial", "count"),
-        )
-        .reset_index()
+    # Pivotear para separar Oficial y Blue
+    # Usamos value_sell (precio de venta) que es el más relevante para el análisis
+    df_pivot = df.pivot_table(
+        index="date", columns="source", values="value_sell", aggfunc=np.mean
     )
 
-    logger.info(f"Agregación completada - {len(aggregated_df):,} períodos generados")
+    # Renombrar columnas (source tiene valores 'Oficial' y 'Blue')
+    df_pivot.columns = [f"usd_ars_{col.lower()}" for col in df_pivot.columns]
 
-    return aggregated_df
+    # Resamplear mensualmente
+    df_monthly = df_pivot.resample("ME").mean().reset_index()
+
+    # Calcular brecha cambiaria en porcentaje
+    df_monthly["brecha_cambiaria_pct"] = (
+        (df_monthly["usd_ars_blue"] - df_monthly["usd_ars_oficial"])
+        / df_monthly["usd_ars_oficial"]
+        * 100
+    )
+
+    logger.info(f"Agregación completada - {len(df_monthly):,} meses generados")
+    logger.info(f"  Columnas: {list(df_monthly.columns)}")
+
+    return df_monthly
 
 
 @timer
@@ -549,53 +429,37 @@ def process_dolar_price_data(raw_df: pd.DataFrame):
     Pipeline para limpiar y transformar datos del precio del dolar oficial y blue
     """
 
+    logger.info("=" * 70)
+    logger.info("INICIANDO PIPELINE DE DOLAR BLUE Y OFICIAL")
+    logger.info("=" * 70)
+
     # Paso 1: Limpiar
     df_cleaned = clean_dollar_price(raw_df)
 
     # Paso 2: Transformar y agregar
     df_transformed = dollar_price_aggs(df_cleaned)
 
-    return df_transformed
+    # Paso 3: Guardar resultados
+    project_root = Path(__file__).parent.parent.parent
+    output_path = project_root / "data" / "processed"
 
-
-#####################################################
-# OTRAS FUNCIONES
-#####################################################
-
-
-def save_to_parquet(
-    df: pd.DataFrame,
-    output_path: Path,
-    filename: str,
-    partition_cols: Optional[List[str]] = None,
-) -> Path:
-    """
-    Guarda DataFrame en formato Parquet para staging.
-
-    Args:
-        df: DataFrame a guardar
-        output_path: Directorio de salida
-        filename: Nombre del archivo
-        partition_cols: Columnas para particionar (opcional)
-
-    Returns:
-        Path al archivo guardado
-    """
-    output_path.mkdir(parents=True, exist_ok=True)
-    file_path = output_path / f"{filename}.parquet"
-
-    df.to_parquet(
-        file_path,
-        engine="pyarrow",
-        compression="snappy",
-        index=False,
-        partition_cols=partition_cols,
+    save_to_parquet(
+        df_cleaned,
+        output_path=output_path,
+        filename="dollar_price_cleaned",
     )
 
-    logger.info(f"Datos guardados en: {file_path}")
-    logger.info(f"Tamaño: {file_path.stat().st_size / 1024 / 1024:.2f} MB")
+    save_to_parquet(
+        df_transformed,
+        output_path=output_path,
+        filename="dollar_price_aggregated",
+    )
 
-    return file_path
+    logger.info("\n" + "=" * 70)
+    logger.info("PIPELINE DE DOLAR COMPLETADO")
+    logger.info("=" * 70)
+
+    return df_transformed
 
 
 # Probar las funciones de transformación
@@ -607,70 +471,50 @@ if __name__ == "__main__":
     data_path = project_root / "data" / "raw"
 
     print("=" * 70)
-    print("PRUEBA DE TRANSFORMACIONES")
+    print("PRUEBA DE PIPELINES DE TRANSFORMACIÓN")
     print("=" * 70)
     print(f"Directorio de datos: {data_path}")
     print("=" * 70)
 
-    # 1. Prueba de Brent
-    print("\n[1/3] Probando transformaciones de Brent...")
+    # 1. Pipeline de Brent
+    print("\n[1/3] Ejecutando pipeline de Brent...")
     print("-" * 70)
     brent_file = data_path / "brent_prices.csv"
     if not brent_file.exists():
         print(f"ADVERTENCIA: Archivo no encontrado: {brent_file}")
     else:
         brent_raw = pd.read_csv(brent_file)
+        brent_transformed = process_brent_price_data(brent_raw)
+        print("\nResumen de datos transformados de Brent:")
+        print(brent_transformed.head())
+        print(f"Total de meses procesados: {len(brent_transformed)}")
 
-    brent_clean = clean_brent_price(brent_raw)
-    brent_monthly = agg_brent_price(brent_clean)
-
-    print("Datos originales de Brent:")
-    print(brent_raw.head())
-    print(f"\nDatos limpios: {len(brent_clean)} registros")
-    print(brent_clean.head())
-    print(f"\nDatos agregados mensualmente: {len(brent_monthly)} meses")
-    print(brent_monthly.head())
-
-    # 2. Prueba de Dólar
-    print("\n[2/3] Probando transformaciones de Dólar...")
+    # 2. Pipeline de Dólar
+    print("\n[2/3] Ejecutando pipeline de Dólar...")
     print("-" * 70)
     dollar_file = data_path / "usd_ars_bluelytics.csv"
     if not dollar_file.exists():
         print(f"ADVERTENCIA: Archivo no encontrado: {dollar_file}")
     else:
         dollar_raw = pd.read_csv(dollar_file)
+        dollar_transformed = process_dolar_price_data(dollar_raw)
+        print("\nResumen de datos transformados de Dólar:")
+        print(dollar_transformed.head())
+        print(f"Total de meses procesados: {len(dollar_transformed)}")
 
-    dollar_clean = clean_dollar_price(dollar_raw)
-    dollar_monthly = dollar_price_aggs(dollar_clean, freq="M")
-
-    print("Datos originales de Dólar:")
-    print(dollar_raw.head())
-    print(f"\nDatos limpios: {len(dollar_clean)} registros")
-    print(dollar_clean.head())
-    print(f"\nDatos agregados mensualmente: {len(dollar_monthly)} meses")
-    print(dollar_monthly.head())
-
-    # 3. Prueba de Combustibles
-    print("\n[3/3] Probando transformaciones de Combustibles...")
+    # 3. Pipeline de Combustibles
+    print("\n[3/3] Ejecutando pipeline de Combustibles...")
     print("-" * 70)
     fuel_file = data_path / "precios_eess_completo.csv"
     if not fuel_file.exists():
         print(f"ADVERTENCIA: Archivo no encontrado: {fuel_file}")
     else:
         fuel_raw = pd.read_csv(fuel_file)
-
-    fuel_clean = clean_fuel_price(fuel_raw)
-
-    print(f"\nDatos limpios: {len(fuel_clean)} registros")
-    print(fuel_clean.head())
-    print("Productos únicos luego de la limpieza")
-    print(fuel_clean["producto"].unique())
-
-    fuel_transformed = fuel_price_aggs(fuel_clean)
-
-    print("\nDataFrame Agrupado")
-    print(fuel_transformed.head())
+        fuel_transformed = process_fuel_data_pipeline(fuel_raw, save_staging=True)
+        print("\nResumen de datos transformados de Combustibles:")
+        print(fuel_transformed.head())
+        print(f"Total de registros agregados: {len(fuel_transformed)}")
 
     print("\n" + "=" * 70)
-    print("TODAS LAS TRANSFORMACIONES COMPLETADAS EXITOSAMENTE")
+    print("TODOS LOS PIPELINES COMPLETADOS EXITOSAMENTE")
     print("=" * 70)

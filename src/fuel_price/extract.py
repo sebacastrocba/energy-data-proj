@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 from typing import Optional, List, Tuple
 import requests
-from .config import START_DATE_BRENT
+from fuel_price.config import START_DATE_BRENT, START_DATE_DOLLAR
 
 # Funciones auxiliares
 
@@ -53,7 +53,7 @@ def extract_brent_prices(
     output_path: Optional[Path] = None,
 ) -> pd.DataFrame:
     """
-    Extrae precios históricos de Brent (FULL REFRESH).
+    Extrae precios históricos de Brent.
     Siempre descarga desde start_date hasta hoy.
     Sobrescribe archivo existente para mantener datos actualizados.
 
@@ -85,13 +85,13 @@ def extract_brent_prices(
 
     # Procesar
     brent_df = brent_data["Close"].reset_index()
-    brent_df.columns = ["date", "brent_price_usd"]
+    brent_df.columns = ["date", "brent_price"]
 
     print(f"Descargados {len(brent_df):,} registros de Brent")
 
     # Sobrescribe archivo anterior
     output_path.mkdir(parents=True, exist_ok=True)
-    file_path = output_path / "brent_prices.csv"  # Nombre fijo (sobrescribe)
+    file_path = output_path / "brent_prices.csv"
 
     brent_df.to_csv(file_path, index=False)
     print(f"Archivo actualizado: {file_path}")
@@ -107,7 +107,7 @@ def extract_brent_prices(
 
 
 def extract_dolar_bluelytics(
-    start_date: str = START_DATE_BRENT,
+    start_date: str = START_DATE_DOLLAR,
     end_date: Optional[str] = None,
     tipos: List[str] = ["oficial", "blue"],
     output_path: Optional[Path] = None,
@@ -125,7 +125,7 @@ def extract_dolar_bluelytics(
         output_path: Dónde guardar CSV
 
     Returns:
-        DataFrame con ['fecha', 'usd_ars_oficial', 'usd_ars_blue', 'brecha_cambiaria_pct']
+        DataFrame con datos completos actualizados.
     """
 
     if end_date is None:
@@ -150,81 +150,35 @@ def extract_dolar_bluelytics(
     except requests.exceptions.RequestException as e:
         raise ValueError(f"Error al obtener datos de Bluelytics: {e}")
 
-    # Convertir a DataFrame
     df = pd.DataFrame(data)
+    if df.empty:
+        raise ValueError("La API de Bluelytics devolvió un resultado vacío.")
 
-    print(f"Descargados {len(df):,} registros históricos")
-
-    # Convertir fecha a datetime
     df["date"] = pd.to_datetime(df["date"])
-
-    # Filtrar por rango de fechas
     start_dt = pd.to_datetime(start_date)
     end_dt = pd.to_datetime(end_date)
     df = df[(df["date"] >= start_dt) & (df["date"] <= end_dt)]
 
-    # Calcular promedio compra/venta
-    df["promedio"] = ((df["value_buy"] + df["value_sell"]) / 2).round(2)
+    if tipos:
+        tipos_normalizados = {tipo.lower() for tipo in tipos}
+        df = df[df["source"].str.lower().isin(tipos_normalizados)]
 
-    # Pivotar para tener columnas por tipo
-    pivot_df = df.pivot_table(
-        index="date", columns="source", values="promedio", aggfunc="first"
-    ).reset_index()
+    df = df.sort_values("date").reset_index(drop=True)
 
-    # Renombrar columnas
-    pivot_df.columns = ["fecha"] + [
-        f"usd_ars_{col.lower()}" for col in pivot_df.columns[1:]
-    ]
+    print(f"\nDatos procesados: {len(df):,} registros")
+    if not df.empty:
+        for source, sub_df in df.groupby("source"):
+            print(f"   {source} → {len(sub_df)} días")
 
-    # Ordenar por fecha
-    pivot_df = pivot_df.sort_values("fecha").reset_index(drop=True)
-
-    # Calcular brecha cambiaria si ambos tipos existen
-    if "usd_ars_oficial" in pivot_df.columns and "usd_ars_blue" in pivot_df.columns:
-        pivot_df["brecha_cambiaria_pct"] = (
-            (
-                (pivot_df["usd_ars_blue"] - pivot_df["usd_ars_oficial"])
-                / pivot_df["usd_ars_oficial"]
-                * 100
-            )
-        ).round(2)
-
-        brecha_promedio = pivot_df["brecha_cambiaria_pct"].mean()
-        print(f"\nBrecha cambiaria promedio: {brecha_promedio:.2f}%")
-
-    # Filtrar columnas según tipos solicitados
-    columnas_finales = ["fecha"]
-    if "oficial" in tipos and "usd_ars_oficial" in pivot_df.columns:
-        columnas_finales.append("usd_ars_oficial")
-    if "blue" in tipos and "usd_ars_blue" in pivot_df.columns:
-        columnas_finales.append("usd_ars_blue")
-    if len(columnas_finales) > 2 and "brecha_cambiaria_pct" in pivot_df.columns:
-        columnas_finales.append("brecha_cambiaria_pct")
-
-    result_df = pivot_df[columnas_finales].copy()
-
-    print(f"\nDatos procesados: {len(result_df):,} días")
-    if "usd_ars_oficial" in result_df.columns:
-        print(
-            f"   USD/ARS Oficial - Promedio: ${result_df['usd_ars_oficial'].mean():.2f}"
-        )
-        print(f"   USD/ARS Oficial - Mínimo: ${result_df['usd_ars_oficial'].min():.2f}")
-        print(f"   USD/ARS Oficial - Máximo: ${result_df['usd_ars_oficial'].max():.2f}")
-    if "usd_ars_blue" in result_df.columns:
-        print(f"   USD/ARS Blue - Promedio: ${result_df['usd_ars_blue'].mean():.2f}")
-        print(f"   USD/ARS Blue - Mínimo: ${result_df['usd_ars_blue'].min():.2f}")
-        print(f"   USD/ARS Blue - Máximo: ${result_df['usd_ars_blue'].max():.2f}")
-
-    # Guardar (usar path por defecto si no se especifica)
     if output_path is None:
         output_path = get_default_data_path()
 
     output_path.mkdir(parents=True, exist_ok=True)
     file_path = output_path / "usd_ars_bluelytics.csv"
-    result_df.to_csv(file_path, index=False)
+    df.to_csv(file_path, index=False)
     print(f"\nGuardado en: {file_path}")
 
-    return result_df
+    return df
 
 
 ##################################################################################
@@ -237,14 +191,14 @@ def extract_fuel_prices(
 ) -> pd.DataFrame:
     """
     Extrae precios de combustibles.
-    Ejecuta script que descarga datos completos y sobrescribe archivos.
+    Ejecuta script de descarga si update_data=True.
 
     Args:
         data_path: Directorio de datos (default: data/raw)
         update_data: Si True, ejecuta descarga (default: True)
 
     Returns:
-        DataFrame con datos completos actualizados
+        DataFrame con datos completos de combustibles
     """
     if data_path is None:
         data_path = get_default_data_path()
@@ -254,34 +208,31 @@ def extract_fuel_prices(
         print(f"Actualizando datos de combustibles...")
 
         project_root = data_path.parent.parent
-        script_path = project_root / "src" / "fuel_price" / "get_price_data_SE_linux.py"
+        script_path = project_root / "src" / "fuel_price" / "get_price_data_SE.py"
 
-        # Script descarga datos completos y sobrescribe
+        # El script decide automáticamente qué descargar según el cache
         run_download_script(script_path)
         print(f"Script completado - datos actualizados")
     else:
         print(f"Actualización omitida - leyendo archivos existentes")
 
-    # Leer archivos actualizados
-    csv_files = find_csv_files(data_path, pattern="*precios*.csv")
+    # Leer el archivo completo que ya está concatenado
+    complete_file = data_path / "precios_eess_completo.csv"
 
-    if not csv_files:
+    if not complete_file.exists():
         raise FileNotFoundError(
-            f"No se encontraron archivos CSV en {data_path}. "
-            "Ejecuta el script de descarga primero."
+            f"No se encontró el archivo completo: {complete_file}\n"
+            "Ejecuta el script de descarga primero con update_data=True"
         )
 
-    print(f"Archivos encontrados: {len(csv_files)}")
-    for csv_file in csv_files:
-        print(f"   - {csv_file.name}")
+    print(f"Leyendo archivo completo: {complete_file.name}")
 
-    # Combinar todos los archivos
-    dfs = [pd.read_csv(f) for f in csv_files]
-    combined_df = pd.concat(dfs, ignore_index=True)
+    # Leer el archivo completo
+    fuel_df = pd.read_csv(complete_file)
 
-    print(f"Cargados {len(combined_df):,} registros de combustibles")
+    print(f"Cargados {len(fuel_df):,} registros de combustibles")
 
-    return combined_df
+    return fuel_df
 
 
 ###################################################################################
@@ -296,7 +247,7 @@ def extract_all_data(
     update_all: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Extrae todas las fuentes de datos (FULL REFRESH).
+    Extrae todas las fuentes de datos.
 
     Fuentes:
     1. Brent (Yahoo Finance) - Precios en USD
@@ -367,7 +318,7 @@ def extract_all_data(
         f"     - Período: {brent_prices['date'].min()} a {brent_prices['date'].max()}"
     )
     print(
-        f"     - Precio promedio: ${brent_prices['brent_price_usd'].mean():.2f} USD/barril"
+        f"     - Precio promedio: ${brent_prices['brent_price'].mean():.2f} USD/barril"
     )
 
     print(f"\n   COMBUSTIBLES (ARS):")
@@ -381,7 +332,7 @@ def extract_all_data(
     print(f"\n   USD/ARS (Oficial + Blue):")
     print(f"     - Registros: {len(dolar_data):,}")
     print(
-        f"     - Período: {dolar_data['fecha'].min().date()} a {dolar_data['fecha'].max().date()}"
+        f"     - Período: {dolar_data['date'].min().date()} a {dolar_data['date'].max().date()}"
     )
     if "usd_ars_oficial" in dolar_data.columns:
         print(

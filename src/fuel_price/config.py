@@ -2,6 +2,7 @@ import numpy as np
 
 # Extract config
 START_DATE_BRENT = "2024-01-01"
+START_DATE_DOLLAR = "2024-01-01"
 END_DATE_BRENT = None
 
 # Mapping de nombres de productos a nombres estandarizados SE

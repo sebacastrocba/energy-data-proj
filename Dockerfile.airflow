@@ -1,0 +1,35 @@
+# Dockerfile.airflow
+FROM apache/airflow:2.11.0
+
+USER root
+
+# Instalar dependencias del sistema
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    mdbtools \
+    && rm -rf /var/lib/apt/lists/*
+
+# Crear directorio de Poetry con permisos correctos
+RUN mkdir -p /opt/poetry && chown -R airflow:root /opt/poetry
+
+USER airflow
+
+# Instalar Poetry
+ENV POETRY_VERSION=1.7.1 \
+    POETRY_HOME="/opt/poetry" \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    PYTHONPATH="/opt/airflow/src:${PYTHONPATH}"
+ENV PATH="$POETRY_HOME/bin:$PATH"
+
+RUN curl -sSL https://install.python-poetry.org | python3 -
+
+# Copiar archivos de dependencias
+COPY --chown=airflow:root pyproject.toml poetry.lock README.md ./
+
+# Copiar código fuente del proyecto
+COPY --chown=airflow:root src/ ./src/
+
+# Instalar dependencias Y el paquete fuel_price
+RUN poetry install --only main

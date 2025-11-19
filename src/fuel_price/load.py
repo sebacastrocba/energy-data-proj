@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 import os
 from dotenv import load_dotenv
+from contextlib import contextmanager
 
 # Cargar variables de entorno
 load_dotenv()
@@ -18,48 +19,63 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Funciones de conexion
+# 1. Creo el Context Manager
 
 
-def get_postgres_connection(
-    host: Optional[str] = None,
-    port: Optional[int] = None,
-    database: Optional[str] = None,
-    user: Optional[str] = None,
-    password: Optional[str] = None,
-):
+@contextmanager
+def get_db_connection():
     """
-    Crea conexión a PostgreSQL.
+    Context manager para conexiones PostgreSQL.
+    Maneja automáticamente apertura, commit/rollback y cierre.
 
-    Args:
-        host: Host de PostgreSQL (default: desde .env)
-        port: Puerto (default: desde .env)
-        database: Nombre de base de datos (default: desde .env)
-        user: Usuario (default: desde .env)
-        password: Contraseña (default: desde .env)
+    Uso:
+        with get_db_connection() as (conn, cursor):
+            cursor.execute("INSERT ...")
+            # commit automático al salir del bloque
 
-    Returns:
-        Conexión psycopg2
+    Yields:
+        tuple: (conexión, cursor) listos para usar
     """
-    connection_params = {
-        "host": host or os.getenv("POSTGRES_HOST", "localhost"),
-        "port": port or int(os.getenv("POSTGRES_PORT", 5432)),
-        "database": database or os.getenv("POSTGRES_DB", "fuel_prices_db"),
-        "user": user or os.getenv("POSTGRES_USER", "fuel_user"),
-        "password": password or os.getenv("POSTGRES_PASSWORD", "fuel_password"),
-    }
+    conn = None
+    cursor = None
 
     try:
-        host = str(connection_params["host"])
-        port = int(connection_params["port"])  # type: ignore[call-overload]
-        db = connection_params["database"]
-        logger.info(f"Conectando a PostgreSQL: {host}:{port}/{db}")
-        conn = psycopg2.connect(**connection_params)
+        # 1. CONECTAR
+        host = os.getenv("POSTGRES_HOST", "localhost")
+        port = int(os.getenv("POSTGRES_PORT", "5432"))
+        database = os.getenv("POSTGRES_DB", "fuel_prices_db")
+        user = os.getenv("POSTGRES_USER", "fuel_user")
+        password = os.getenv("POSTGRES_PASSWORD", "fuel_password")
+
+        logger.info(f"Conectando a PostgreSQL: {host}:{port}/{database}")
+
+        conn = psycopg2.connect(
+            host=host, port=port, database=database, user=user, password=password
+        )
+        cursor = conn.cursor()
         logger.info("Conexion exitosa a PostgreSQL")
-        return conn
-    except psycopg2.Error as e:
-        logger.error(f"Error al conectar a PostgreSQL: {e}")
+
+        # 2. YIELD
+        yield conn, cursor
+
+        # 3. COMMIT
+        conn.commit()
+        logger.debug("Commit exitoso")
+
+    except Exception as e:
+        # 4. ROLLBACK
+        if conn:
+            conn.rollback()
+            logger.error(f"Rollback ejecutado debido a error: {e}")
         raise
+
+    finally:
+        # 5. CERRAR
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+            logger.debug("Conexión cerrada")
 
 
 def test_connection() -> bool:
@@ -70,25 +86,25 @@ def test_connection() -> bool:
         True si la conexión es exitosa, False en caso contrario
     """
     try:
-        conn = get_postgres_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT version();")
-        version = cursor.fetchone()
-        logger.info(f"Version de PostgreSQL: {version[0]}")
-        cursor.close()
-        conn.close()
+        with get_db_connection() as (conn, cursor):
+            cursor.execute("SELECT version();")
+            version = cursor.fetchone()
+
         return True
+
     except Exception as e:
         logger.error(f"Error en test de conexion: {e}")
         return False
 
 
-# Funciones de carga
+# 2. Funciones de carga
+
+## 2.1 Cargamos datos del precio del Brent
 
 
 def load_brent_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
     """
-    Carga datos de Brent a staging.brent_prices.
+    Carga datos de Brent a staging.brent_price.
 
     Args:
         df: DataFrame con columnas ['date', 'brent_price']
@@ -99,60 +115,50 @@ def load_brent_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
     """
     logger.info("Iniciando carga de Brent a staging")
 
-    # Validar columnas requeridas
+    # 1. VALIDACIÓN
     required_cols = ["date", "brent_price"]
     if not all(col in df.columns for col in required_cols):
         raise ValueError(f"DataFrame debe contener columnas: {required_cols}")
 
-    conn = get_postgres_connection()
-    cursor = conn.cursor()
+    # 2. USAR CONTEXT MANAGER
+    with get_db_connection() as (conn, cursor):
 
-    try:
-        # Truncar tabla si se solicita
+        # 3. TRUNCAR (si se solicita)
         if truncate:
-            logger.info("Truncando tabla staging.brent_prices")
+            logger.info("Truncando tabla staging.brent_price")
             cursor.execute(
-                "TRUNCATE TABLE staging.brent_prices RESTART IDENTITY CASCADE;"
+                "TRUNCATE TABLE staging.brent_price RESTART IDENTITY CASCADE;"
             )
 
-        # Preparar datos para inserción (convertir tipos numpy a Python nativos)
+        # 4. PREPARAR DATOS
         df_copy = df[["date", "brent_price"]].copy()
         df_copy["date"] = pd.to_datetime(df_copy["date"]).dt.date
-
-        # Convertir usando values.tolist() que es mucho más rápido
         records_list = df_copy.values.tolist()
 
-        # Insertar datos usando execute_values (más eficiente que insert por fila)
+        # 5. INSERTAR DATOS
         insert_query = """
-            INSERT INTO staging.brent_prices (date, brent_price_usd)
+            INSERT INTO staging.brent_price (date, brent_price)
             VALUES %s
             ON CONFLICT (date) DO UPDATE
-            SET brent_price_usd = EXCLUDED.brent_price_usd,
+            SET brent_price = EXCLUDED.brent_price,
                 load_timestamp = CURRENT_TIMESTAMP;
         """
 
         execute_values(cursor, insert_query, records_list)
 
-        conn.commit()
-        rows_inserted = len(records_list)
         logger.info(
-            f"Carga completada: {rows_inserted} registros insertados en staging.brent_prices"
+            f"Carga completada: {len(records_list)} registros insertados en staging.brent_price"
         )
 
-        return rows_inserted
+        return len(records_list)
 
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Error en carga de Brent: {e}")
-        raise
-    finally:
-        cursor.close()
-        conn.close()
+
+## 2.2 Cargamos datos de precios de combustibles
 
 
 def load_fuel_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
     """
-    Carga datos de combustibles a staging.fuel_prices.
+    Carga datos de combustibles a staging.fuel_prices usando COPY.
 
     Args:
         df: DataFrame con datos de combustibles
@@ -161,9 +167,9 @@ def load_fuel_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
     Returns:
         Cantidad de registros insertados
     """
-    logger.info("Iniciando carga de combustibles a staging")
+    logger.info("Iniciando carga de datos de la SE a staging")
 
-    # Validar columnas requeridas
+    # VALIDACIÓN
     required_cols = [
         "periodo",
         "provincia",
@@ -172,28 +178,27 @@ def load_fuel_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
         "precio_surtidor",
         "volumen",
     ]
+
     if not all(col in df.columns for col in required_cols):
         raise ValueError(f"DataFrame debe contener columnas: {required_cols}")
 
-    conn = get_postgres_connection()
-    cursor = conn.cursor()
+    # CONTEXT MANAGER
+    with get_db_connection() as (conn, cursor):
 
-    try:
         if truncate:
             logger.info("Truncando tabla staging.fuel_prices")
             cursor.execute(
                 "TRUNCATE TABLE staging.fuel_prices RESTART IDENTITY CASCADE;"
             )
 
-        # Preparar datos
+        # Preparar datos para COPY
         logger.info(f"Preparando {len(df):,} registros para inserción...")
         df_copy = df[required_cols].copy()
 
-        # Convertir periodo a date si es datetime
         if pd.api.types.is_datetime64_any_dtype(df_copy["periodo"]):
             df_copy["periodo"] = pd.to_datetime(df_copy["periodo"]).dt.date
 
-        # Usar StringIO para COPY - mucho más rápido que INSERT
+        # Usar StringIO para COPY
         from io import StringIO
         import csv
 
@@ -207,8 +212,10 @@ def load_fuel_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
             quoting=csv.QUOTE_NONE,
             escapechar="\\",
         )
+
         buffer.seek(0)
 
+        # Ejecutar COPY
         logger.info("Ejecutando COPY para inserción masiva...")
         cols = ", ".join(required_cols)
         copy_sql = (
@@ -217,26 +224,198 @@ def load_fuel_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
         )
         cursor.copy_expert(sql=copy_sql, file=buffer)
 
-        conn.commit()
-        rows_inserted = len(df_copy)
+        # Commit automático al salir del with
         logger.info(
-            f"Carga completada: {rows_inserted} registros insertados en staging.fuel_prices"
+            f"Carga completada: {len(df_copy)} registros insertados en staging.fuel_prices"
         )
-
-        return rows_inserted
-
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Error en carga de combustibles: {e}")
-        raise
-    finally:
-        cursor.close()
-        conn.close()
+        return len(df_copy)
 
 
-def load_usd_ars_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
+## 2.3 Cargamos datos de dolar blue y oficial
+
+
+def load_dolar_price_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
     """
     Carga datos de USD/ARS a staging.usd_ars_rates.
+
+    Args:
+        df: DataFrame con columnas ['date', 'source', 'value_buy', 'value_sell']
+            (datos SIN pivotar del archivo limpio)
+        truncate: Si True, elimina datos existentes antes de cargar
+
+    Returns:
+        Cantidad de registros insertados
+    """
+    logger.info("Iniciando carga de USD/ARS a staging")
+
+    # VALIDACIÓN - Columnas del archivo LIMPIO (sin pivotar)
+    required_cols = ["date", "source", "value_sell"]
+    if not all(col in df.columns for col in required_cols):
+        raise ValueError(
+            f"DataFrame debe contener columnas: {required_cols}. "
+            f"Columnas recibidas: {df.columns.tolist()}"
+        )
+
+    with get_db_connection() as (conn, cursor):
+        if truncate:
+            logger.info("Truncando tabla staging.usd_ars_rates")
+            cursor.execute(
+                "TRUNCATE TABLE staging.usd_ars_rates RESTART IDENTITY CASCADE;"
+            )
+
+        # Preparar datos SIN pivotar ni agregar
+        cols_to_use = ["date", "source", "value_buy", "value_sell"]
+        df_copy = df[cols_to_use].copy()
+        df_copy["date"] = pd.to_datetime(df_copy["date"]).dt.date
+
+        records_list = df_copy.values.tolist()
+
+        # INSERT con estructura sin pivotar
+        insert_query = """
+            INSERT INTO staging.usd_ars_rates
+            (date, source, value_buy, value_sell)
+            VALUES %s
+            ON CONFLICT (date, source) DO UPDATE
+            SET value_buy = EXCLUDED.value_buy,
+                value_sell = EXCLUDED.value_sell,
+                load_timestamp = CURRENT_TIMESTAMP;
+        """
+
+        execute_values(cursor, insert_query, records_list)
+
+        logger.info(
+            f"Carga completada: {len(records_list)} registros insertados en staging.usd_ars_rates"
+        )
+        return len(records_list)
+
+
+# Funciones de carga - Analytics
+
+## Cargamos datos agregados del Brent
+
+
+def load_brent_to_analytics(df: pd.DataFrame, truncate: bool = True) -> int:
+    """
+    Carga datos de Brent agregados mensualmente a analytics.
+
+    Args:
+        df: DataFrame con columnas ['date', 'avg_brent_price']
+        truncate: Si True, elimina datos existentes antes de cargar
+
+    Returns:
+        Cantidad de registros insertados
+    """
+    logger.info("Iniciando carga de Brent a analytics")
+
+    # VALIDACIÓN - Verificar columnas requeridas
+    required_cols = ["date", "avg_brent_price"]
+    if not all(col in df.columns for col in required_cols):
+        raise ValueError(
+            f"DataFrame debe contener columnas: {required_cols}. "
+            f"Columnas recibidas: {df.columns.tolist()}"
+        )
+
+    with get_db_connection() as (conn, cursor):
+        if truncate:
+            logger.info("Truncando tabla analytics.brent_prices_monthly")
+            cursor.execute(
+                "TRUNCATE TABLE analytics.brent_prices_monthly RESTART IDENTITY CASCADE;"
+            )
+
+        # Preparar datos
+        df_copy = df[required_cols].copy()
+
+        # Convertir date a formato date (sin hora)
+        df_copy["date"] = pd.to_datetime(df_copy["date"]).dt.date
+
+        records_list = df_copy.values.tolist()
+
+        # INSERT con las columnas correctas
+        insert_query = """
+            INSERT INTO analytics.brent_prices_monthly
+            (date, avg_brent_price)
+            VALUES %s
+            ON CONFLICT (date) DO UPDATE
+            SET avg_brent_price = EXCLUDED.avg_brent_price,
+                load_timestamp = CURRENT_TIMESTAMP;
+        """
+
+        execute_values(cursor, insert_query, records_list)
+
+        logger.info(
+            f"Carga completada: {len(records_list)} registros en analytics.brent_prices_monthly"
+        )
+        return len(records_list)
+
+
+def load_fuel_to_analytics(df: pd.DataFrame, truncate: bool = True) -> int:
+    """
+    Carga datos de precios de combustibles agregados de la SE a analytics.fuel_prices_monthly.
+
+    Args:
+        df: DataFrame ya agregado mensualmente con columnas:
+            ['periodo', 'producto', 'precio_surtidor_mediana', 'volumen_total']
+        truncate: Si True, elimina datos existentes antes de cargar
+
+    Returns:
+        Cantidad de registros insertados
+    """
+    logger.info("Iniciando carga de combustibles SE a analytics")
+
+    # VALIDACIÓN - Verificar columnas requeridas
+    required_cols = [
+        "periodo",
+        "producto",
+        "precio_surtidor_mediana",
+        "volumen_total",
+    ]
+
+    if not all(col in df.columns for col in required_cols):
+        raise ValueError(
+            f"DataFrame debe contener columnas: {required_cols}. "
+            f"Columnas recibidas: {df.columns.tolist()}"
+        )
+
+    # CONTEXT MANAGER
+    with get_db_connection() as (conn, cursor):
+
+        if truncate:
+            logger.info("Truncando tabla analytics.fuel_prices_monthly")
+            cursor.execute(
+                "TRUNCATE TABLE analytics.fuel_prices_monthly RESTART IDENTITY CASCADE;"
+            )
+
+        # Preparar datos
+        df_copy = df[required_cols].copy()
+
+        # Convertir periodo a date (sin hora)
+        df_copy["periodo"] = pd.to_datetime(df_copy["periodo"]).dt.date
+
+        records_list = df_copy.values.tolist()
+
+        # INSERT con las columnas correctas
+        insert_query = """
+            INSERT INTO analytics.fuel_prices_monthly
+            (periodo, producto, precio_surtidor_mediana, volumen_total)
+            VALUES %s
+            ON CONFLICT (periodo, producto) DO UPDATE
+            SET precio_surtidor_mediana = EXCLUDED.precio_surtidor_mediana,
+                volumen_total = EXCLUDED.volumen_total,
+                load_timestamp = CURRENT_TIMESTAMP;
+        """
+
+        execute_values(cursor, insert_query, records_list)
+
+        logger.info(
+            f"Carga completada: {len(records_list)} registros insertados en analytics.fuel_prices_monthly"
+        )
+
+        return len(records_list)
+
+
+def load_dolar_price_to_analytics(df: pd.DataFrame, truncate: bool = True) -> int:
+    """
+    Carga datos de USD/ARS agregados a analytics.usd_ars_rates_monthly.
 
     Args:
         df: DataFrame con columnas ['date', 'usd_ars_oficial', 'usd_ars_blue', 'brecha_cambiaria_pct']
@@ -245,45 +424,38 @@ def load_usd_ars_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
     Returns:
         Cantidad de registros insertados
     """
-    logger.info("Iniciando carga de USD/ARS a staging")
+    logger.info("Iniciando carga de USD/ARS a analytics")
 
-    # Validar columnas requeridas
     required_cols = ["date", "usd_ars_oficial", "usd_ars_blue"]
     if not all(col in df.columns for col in required_cols):
-        raise ValueError(f"DataFrame debe contener columnas: {required_cols}")
+        raise ValueError(
+            f"DataFrame debe contener columnas: {required_cols}. "
+            f"Columnas recibidas: {df.columns.tolist()}"
+        )
 
-    conn = get_postgres_connection()
-    cursor = conn.cursor()
-
-    try:
+    with get_db_connection() as (conn, cursor):
         if truncate:
-            logger.info("Truncando tabla staging.usd_ars_rates")
+            logger.info("Truncando tabla analytics.usd_ars_rates_monthly")
             cursor.execute(
-                "TRUNCATE TABLE staging.usd_ars_rates RESTART IDENTITY CASCADE;"
+                "TRUNCATE TABLE analytics.usd_ars_rates_monthly RESTART IDENTITY CASCADE;"
             )
 
-        # Preparar columnas (brecha_cambiaria_pct es opcional)
+        # Preparar columnas (con o sin brecha)
         cols_to_use = ["date", "usd_ars_oficial", "usd_ars_blue"]
         if "brecha_cambiaria_pct" in df.columns:
             cols_to_use.append("brecha_cambiaria_pct")
 
-        # Convertir tipos numpy a Python nativos
         df_copy = df[cols_to_use].copy()
         df_copy["date"] = pd.to_datetime(df_copy["date"]).dt.date
-
-        # Renombrar 'date' a 'fecha' para coincidir con la tabla
-        df_copy = df_copy.rename(columns={"date": "fecha"})
-
-        # Convertir usando values.tolist() que es mucho más rápido
         records_list = df_copy.values.tolist()
 
-        # Construir query dinámicamente según columnas disponibles
+        # Query adaptado según columnas disponibles
         if "brecha_cambiaria_pct" in df.columns:
             insert_query = """
-                INSERT INTO staging.usd_ars_rates
-                (fecha, usd_ars_oficial, usd_ars_blue, brecha_cambiaria_pct)
+                INSERT INTO analytics.usd_ars_rates_monthly
+                (date, usd_ars_oficial, usd_ars_blue, brecha_cambiaria_pct)
                 VALUES %s
-                ON CONFLICT (fecha) DO UPDATE
+                ON CONFLICT (date) DO UPDATE
                 SET usd_ars_oficial = EXCLUDED.usd_ars_oficial,
                     usd_ars_blue = EXCLUDED.usd_ars_blue,
                     brecha_cambiaria_pct = EXCLUDED.brecha_cambiaria_pct,
@@ -291,281 +463,43 @@ def load_usd_ars_to_staging(df: pd.DataFrame, truncate: bool = True) -> int:
             """
         else:
             insert_query = """
-                INSERT INTO staging.usd_ars_rates
-                (fecha, usd_ars_oficial, usd_ars_blue)
+                INSERT INTO analytics.usd_ars_rates_monthly
+                (date, usd_ars_oficial, usd_ars_blue)
                 VALUES %s
-                ON CONFLICT (fecha) DO UPDATE
+                ON CONFLICT (date) DO UPDATE
                 SET usd_ars_oficial = EXCLUDED.usd_ars_oficial,
                     usd_ars_blue = EXCLUDED.usd_ars_blue,
                     load_timestamp = CURRENT_TIMESTAMP;
             """
 
         execute_values(cursor, insert_query, records_list)
-
-        conn.commit()
-        rows_inserted = len(records_list)
         logger.info(
-            f"Carga completada: {rows_inserted} registros insertados en staging.usd_ars_rates"
+            f"Carga completada: {len(records_list)} registros en analytics.usd_ars_rates_monthly"
         )
-
-        return rows_inserted
-
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Error en carga de USD/ARS: {e}")
-        raise
-    finally:
-        cursor.close()
-        conn.close()
-
-
-# Funciones de carga - Analytics
-
-
-def load_brent_to_analytics(df: pd.DataFrame, truncate: bool = True) -> int:
-    """
-    Carga datos de Brent agregados mensualmente a analytics.brent_prices_monthly.
-
-    Args:
-        df: DataFrame ya agregado mensualmente con columnas:
-            ['year', 'month', 'avg_brent_price_usd', 'min_brent_price_usd',
-             'max_brent_price_usd', 'record_count']
-        truncate: Si True, elimina datos existentes antes de cargar
-
-    Returns:
-        Cantidad de registros insertados
-    """
-    logger.info("Iniciando carga de Brent a analytics")
-
-    required_cols = [
-        "year",
-        "month",
-        "avg_brent_price_usd",
-        "min_brent_price_usd",
-        "max_brent_price_usd",
-        "record_count",
-    ]
-    if not all(col in df.columns for col in required_cols):
-        raise ValueError(
-            f"DataFrame debe contener columnas: {required_cols}. "
-            f"Las agregaciones deben hacerse en transform.py"
-        )
-
-    conn = get_postgres_connection()
-    cursor = conn.cursor()
-
-    try:
-        if truncate:
-            logger.info("Truncando tabla analytics.brent_prices_monthly")
-            cursor.execute(
-                "TRUNCATE TABLE analytics.brent_prices_monthly RESTART IDENTITY CASCADE;"
-            )
-
-        # Convertir tipos numpy a Python nativos
-        df_copy = df[required_cols].copy()
-
-        # Convertir usando values.tolist() que es mucho más rápido
-        records_list = df_copy.values.tolist()
-
-        insert_query = """
-            INSERT INTO analytics.brent_prices_monthly
-            (year, month, avg_brent_price_usd, min_brent_price_usd, max_brent_price_usd, record_count)
-            VALUES %s
-            ON CONFLICT (year, month) DO UPDATE
-            SET avg_brent_price_usd = EXCLUDED.avg_brent_price_usd,
-                min_brent_price_usd = EXCLUDED.min_brent_price_usd,
-                max_brent_price_usd = EXCLUDED.max_brent_price_usd,
-                record_count = EXCLUDED.record_count,
-                load_timestamp = CURRENT_TIMESTAMP;
-        """
-
-        execute_values(cursor, insert_query, records_list)
-
-        conn.commit()
-        rows_inserted = len(records_list)
-        logger.info(
-            f"Carga completada: {rows_inserted} registros insertados en analytics.brent_prices_monthly"
-        )
-
-        return rows_inserted
-
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Error en carga de Brent analytics: {e}")
-        raise
-    finally:
-        cursor.close()
-        conn.close()
-
-
-def load_fuel_to_analytics(df: pd.DataFrame, truncate: bool = True) -> int:
-    """
-    Carga datos de combustibles agregados a analytics.fuel_prices_monthly.
-
-    Args:
-        df: DataFrame ya agregado mensualmente con columnas:
-            ['year', 'month', 'provincia', 'bandera', 'producto',
-             'precio_surtidor_mediana', 'volumen_total']
-        truncate: Si True, elimina datos existentes antes de cargar
-
-    Returns:
-        Cantidad de registros insertados
-    """
-    logger.info("Iniciando carga de combustibles a analytics")
-
-    required_cols = [
-        "year",
-        "month",
-        "provincia",
-        "bandera",
-        "producto",
-        "precio_surtidor_mediana",
-        "volumen_total",
-    ]
-    if not all(col in df.columns for col in required_cols):
-        raise ValueError(
-            f"DataFrame debe contener columnas: {required_cols}. "
-            f"Las agregaciones deben hacerse en transform.py"
-        )
-
-    conn = get_postgres_connection()
-    cursor = conn.cursor()
-
-    try:
-        if truncate:
-            logger.info("Truncando tabla analytics.fuel_prices_monthly")
-            cursor.execute(
-                "TRUNCATE TABLE analytics.fuel_prices_monthly RESTART IDENTITY CASCADE;"
-            )
-
-        # Convertir tipos numpy a Python nativos
-        df_copy = df[required_cols].copy()
-
-        # Convertir usando values.tolist() que es mucho más rápido
-        records_list = df_copy.values.tolist()
-
-        insert_query = """
-            INSERT INTO analytics.fuel_prices_monthly
-            (year, month, provincia, bandera, producto, precio_surtidor_mediana, volumen_total)
-            VALUES %s
-            ON CONFLICT (year, month, provincia, bandera, producto) DO UPDATE
-            SET precio_surtidor_mediana = EXCLUDED.precio_surtidor_mediana,
-                volumen_total = EXCLUDED.volumen_total,
-                load_timestamp = CURRENT_TIMESTAMP;
-        """
-
-        execute_values(cursor, insert_query, records_list)
-
-        conn.commit()
-        rows_inserted = len(records_list)
-        logger.info(
-            f"Carga completada: {rows_inserted} registros insertados en analytics.fuel_prices_monthly"
-        )
-
-        return rows_inserted
-
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Error en carga de combustibles analytics: {e}")
-        raise
-    finally:
-        cursor.close()
-        conn.close()
-
-
-def load_usd_ars_to_analytics(df: pd.DataFrame, truncate: bool = True) -> int:
-    """
-    Carga datos de USD/ARS agregados a analytics.usd_ars_rates_monthly.
-
-    Args:
-        df: DataFrame ya agregado mensualmente con columnas:
-            ['year', 'month', 'avg_usd_ars_oficial', 'avg_usd_ars_blue',
-             'avg_brecha_cambiaria_pct', 'record_count']
-        truncate: Si True, elimina datos existentes antes de cargar
-
-    Returns:
-        Cantidad de registros insertados
-    """
-    logger.info("Iniciando carga de USD/ARS a analytics")
-
-    required_cols = [
-        "year",
-        "month",
-        "avg_usd_ars_oficial",
-        "avg_usd_ars_blue",
-        "avg_brecha_cambiaria_pct",
-        "record_count",
-    ]
-    if not all(col in df.columns for col in required_cols):
-        raise ValueError(
-            f"DataFrame debe contener columnas: {required_cols}. "
-            f"Las agregaciones deben hacerse en transform.py"
-        )
-
-    conn = get_postgres_connection()
-    cursor = conn.cursor()
-
-    try:
-        if truncate:
-            logger.info("Truncando tabla analytics.usd_ars_rates_monthly")
-            cursor.execute(
-                "TRUNCATE TABLE analytics.usd_ars_rates_monthly RESTART IDENTITY CASCADE;"
-            )
-
-        # Convertir tipos numpy a Python nativos
-        df_copy = df[required_cols].copy()
-
-        # Convertir usando values.tolist() que es mucho más rápido
-        records_list = df_copy.values.tolist()
-
-        insert_query = """
-            INSERT INTO analytics.usd_ars_rates_monthly
-            (year, month, avg_usd_ars_oficial, avg_usd_ars_blue, avg_brecha_cambiaria_pct, record_count)
-            VALUES %s
-            ON CONFLICT (year, month) DO UPDATE
-            SET avg_usd_ars_oficial = EXCLUDED.avg_usd_ars_oficial,
-                avg_usd_ars_blue = EXCLUDED.avg_usd_ars_blue,
-                avg_brecha_cambiaria_pct = EXCLUDED.avg_brecha_cambiaria_pct,
-                record_count = EXCLUDED.record_count,
-                load_timestamp = CURRENT_TIMESTAMP;
-        """
-
-        execute_values(cursor, insert_query, records_list)
-
-        conn.commit()
-        rows_inserted = len(records_list)
-        logger.info(
-            f"Carga completada: {rows_inserted} registros insertados en analytics.usd_ars_rates_monthly"
-        )
-
-        return rows_inserted
-
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Error en carga de USD/ARS analytics: {e}")
-        raise
-    finally:
-        cursor.close()
-        conn.close()
+        return len(records_list)
 
 
 # Funcion principal
 
 
 def load_all_data(
-    brent_df: pd.DataFrame,
-    fuel_df: pd.DataFrame,
-    usd_ars_df: pd.DataFrame,
-    load_to_analytics: bool = True,
+    brent_clean: pd.DataFrame,
+    fuel_clean: pd.DataFrame,
+    usd_ars_clean: pd.DataFrame,
+    brent_analytics: pd.DataFrame,
+    fuel_analytics: pd.DataFrame,
+    usd_ars_analytics: pd.DataFrame,
 ):
     """
-    Carga todos los datos a PostgreSQL (staging y opcionalmente analytics).
+    Carga todos los datos a PostgreSQL (staging y analytics).
 
     Args:
-        brent_df: DataFrame con datos de Brent
-        fuel_df: DataFrame con datos de combustibles
-        usd_ars_df: DataFrame con datos de USD/ARS
-        load_to_analytics: Si True, también carga a tablas analytics
+        brent_clean: DataFrame con datos de Brent limpios para staging
+        fuel_clean: DataFrame con datos de combustibles limpios para staging
+        usd_ars_clean: DataFrame con datos de USD/ARS limpios para staging
+        brent_analytics: DataFrame con datos de Brent agregados para analytics
+        fuel_analytics: DataFrame con datos de combustibles agregados para analytics
+        usd_ars_analytics: DataFrame con datos de USD/ARS agregados para analytics
     """
     logger.info("=" * 70)
     logger.info("INICIANDO CARGA COMPLETA A POSTGRESQL")
@@ -579,26 +513,25 @@ def load_all_data(
 
     # Carga a STAGING
     logger.info("\n[1/2] Cargando datos a STAGING...")
-    rows_brent = load_brent_to_staging(brent_df)
-    rows_fuel = load_fuel_to_staging(fuel_df)
-    rows_usd = load_usd_ars_to_staging(usd_ars_df)
+    rows_brent = load_brent_to_staging(brent_clean)
+    rows_fuel = load_fuel_to_staging(fuel_clean)
+    rows_usd = load_dolar_price_to_staging(usd_ars_clean)
 
     logger.info(f"\nSTAGING - Resumen de carga:")
     logger.info(f"  - Brent: {rows_brent} registros")
     logger.info(f"  - Combustibles: {rows_fuel} registros")
     logger.info(f"  - USD/ARS: {rows_usd} registros")
 
-    # Carga a ANALYTICS (opcional)
-    if load_to_analytics:
-        logger.info("\n[2/2] Cargando datos a ANALYTICS...")
-        rows_brent_analytics = load_brent_to_analytics(brent_df)
-        rows_fuel_analytics = load_fuel_to_analytics(fuel_df)
-        rows_usd_analytics = load_usd_ars_to_analytics(usd_ars_df)
+    # Carga a ANALYTICS
+    logger.info("\n[2/2] Cargando datos a ANALYTICS...")
+    rows_brent_analytics = load_brent_to_analytics(brent_analytics)
+    rows_fuel_analytics = load_fuel_to_analytics(fuel_analytics)
+    rows_usd_analytics = load_dolar_price_to_analytics(usd_ars_analytics)
 
-        logger.info(f"\nANALYTICS - Resumen de carga:")
-        logger.info(f"  - Brent mensual: {rows_brent_analytics} registros")
-        logger.info(f"  - Combustibles mensual: {rows_fuel_analytics} registros")
-        logger.info(f"  - USD/ARS mensual: {rows_usd_analytics} registros")
+    logger.info(f"\nANALYTICS - Resumen de carga:")
+    logger.info(f"  - Brent mensual: {rows_brent_analytics} registros")
+    logger.info(f"  - Combustibles mensual: {rows_fuel_analytics} registros")
+    logger.info(f"  - USD/ARS mensual: {rows_usd_analytics} registros")
 
     logger.info("\n" + "=" * 70)
     logger.info("CARGA COMPLETADA EXITOSAMENTE")
@@ -607,69 +540,89 @@ def load_all_data(
 
 # Script de prueba
 
+
 if __name__ == "__main__":
-    import sys
 
-    sys.path.append(str(Path(__file__).parent.parent.parent))
+    logger.info("=" * 70)
+    logger.info("SCRIPT DE PRUEBA - CARGA DE DATOS A POSTGRESQL")
+    logger.info("=" * 70)
 
-    from src.fuel_price.extract import extract_all_data
-    from src.fuel_price.transform import (
-        clean_fuel_price,
-        fuel_price_aggs,
-        fuel_price_aggs_for_analytics,
-        clean_brent_price,
-        agg_brent_price_for_analytics,
-        clean_dollar_price,
-        dollar_price_aggs_for_analytics,
-    )
+    # Obtener rutas a los archivos procesados
+    project_root = Path(__file__).parent.parent.parent
+    processed_path = project_root / "data" / "processed"
 
-    print("\n" + "=" * 70)
-    print("PRUEBA DE CARGA A POSTGRESQL")
-    print("=" * 70)
+    logger.info(f"Directorio de datos procesados: {processed_path}")
 
-    # 1. Extraer datos
-    print("\n[1/3] Extrayendo datos de APIs...")
-    brent_raw, fuel_raw, dolar_raw = extract_all_data(update_all=False)
+    # Verificar que existan los archivos
+    required_files = {
+        "brent_cleaned": processed_path / "brent_price_cleaned.parquet",
+        "brent_monthly": processed_path / "brent_price_monthly.parquet",
+        "fuel_cleaned": processed_path / "fuel_price_cleaned.parquet",
+        "fuel_aggregated": processed_path / "fuel_price_aggregated.parquet",
+        "dollar_cleaned": processed_path / "dollar_price_cleaned.parquet",
+        "dollar_aggregated": processed_path / "dollar_price_aggregated.parquet",
+    }
 
-    # 2. Transformar datos
-    print("\n[2/3] Transformando datos...")
+    missing_files = []
+    for name, filepath in required_files.items():
+        if not filepath.exists():
+            missing_files.append(str(filepath))
+            logger.warning(f"Archivo no encontrado: {filepath}")
 
-    # Brent: limpiar y agregar para analytics
-    brent_clean = clean_brent_price(brent_raw)
-    brent_analytics = agg_brent_price_for_analytics(brent_clean)
+    if missing_files:
+        logger.error("\n" + "=" * 70)
+        logger.error("ERROR: Faltan archivos procesados")
+        logger.error("=" * 70)
+        logger.error("Archivos faltantes:")
+        for f in missing_files:
+            logger.error(f"  - {f}")
+        logger.error(
+            "\nEjecuta primero el script transform.py para generar los archivos."
+        )
+        import sys
 
-    # Combustibles: limpiar y agregar
-    fuel_clean = clean_fuel_price(fuel_raw)
-    fuel_agg = fuel_price_aggs(fuel_clean)
-    fuel_analytics = fuel_price_aggs_for_analytics(fuel_agg)
+        sys.exit(1)
 
-    # Dólar: limpiar y agregar para analytics
-    dolar_clean = clean_dollar_price(dolar_raw)
-    dolar_analytics = dollar_price_aggs_for_analytics(dolar_clean)
+    # Cargar los DataFrames desde Parquet
+    logger.info("\nCargando archivos Parquet...")
 
-    # 3. Cargar datos a STAGING
-    print("\n[3/4] Cargando datos a STAGING...")
-    rows_brent = load_brent_to_staging(brent_clean)
-    rows_fuel = load_fuel_to_staging(fuel_clean)
-    rows_usd = load_usd_ars_to_staging(dolar_clean)
+    brent_clean = pd.read_parquet(required_files["brent_cleaned"])
+    brent_analytics = pd.read_parquet(required_files["brent_monthly"])
 
-    print(f"\nSTAGING - Resumen de carga:")
-    print(f"  - Brent: {rows_brent} registros")
-    print(f"  - Combustibles: {rows_fuel} registros")
-    print(f"  - USD/ARS: {rows_usd} registros")
+    fuel_clean = pd.read_parquet(required_files["fuel_cleaned"])
+    fuel_analytics = pd.read_parquet(required_files["fuel_aggregated"])
 
-    # 4. Cargar datos a ANALYTICS
-    print("\n[4/4] Cargando datos a ANALYTICS...")
-    rows_brent_analytics = load_brent_to_analytics(brent_analytics)
-    rows_fuel_analytics = load_fuel_to_analytics(fuel_analytics)
-    rows_usd_analytics = load_usd_ars_to_analytics(dolar_analytics)
+    usd_ars_clean = pd.read_parquet(required_files["dollar_cleaned"])
+    usd_ars_analytics = pd.read_parquet(required_files["dollar_aggregated"])
 
-    print(f"\nANALYTICS - Resumen de carga:")
-    print(f"  - Brent mensual: {rows_brent_analytics} registros")
-    print(f"  - Combustibles mensual: {rows_fuel_analytics} registros")
-    print(f"  - USD/ARS mensual: {rows_usd_analytics} registros")
+    logger.info("\nArchivos cargados exitosamente:")
+    logger.info(f"  - Brent cleaned: {len(brent_clean):,} registros")
+    logger.info(f"  - Brent monthly: {len(brent_analytics):,} registros")
+    logger.info(f"  - Fuel cleaned: {len(fuel_clean):,} registros")
+    logger.info(f"  - Fuel aggregated: {len(fuel_analytics):,} registros")
+    logger.info(f"  - USD/ARS cleaned: {len(usd_ars_clean):,} registros")
+    logger.info(f"  - USD/ARS aggregated: {len(usd_ars_analytics):,} registros")
 
-    print("\n" + "=" * 70)
-    print("CARGA COMPLETADA EXITOSAMENTE")
-    print("=" * 70)
-    print("\nPRUEBA COMPLETADA")
+    # Ejecutar carga completa
+    try:
+        load_all_data(
+            brent_clean=brent_clean,
+            fuel_clean=fuel_clean,
+            usd_ars_clean=usd_ars_clean,
+            brent_analytics=brent_analytics,
+            fuel_analytics=fuel_analytics,
+            usd_ars_analytics=usd_ars_analytics,
+        )
+
+        logger.info("\n" + "=" * 70)
+        logger.info("✓ PRUEBA COMPLETADA EXITOSAMENTE")
+        logger.info("=" * 70)
+
+    except Exception as e:
+        logger.error("\n" + "=" * 70)
+        logger.error("✗ ERROR EN LA CARGA")
+        logger.error("=" * 70)
+        logger.error(f"Error: {e}")
+        import sys
+
+        sys.exit(1)
