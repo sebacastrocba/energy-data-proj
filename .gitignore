@@ -82,13 +82,35 @@ Desktop.ini
 # Logs
 *.log
 logs/
+*.log.*
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Airflow
+airflow.db
+airflow.cfg.lock
+webserver_config.py
+unittests.cfg
+airflow-webserver.pid
+standalone_admin_password.txt
 
 # Data files - Exclude large raw data files
 data/raw/*.csv
 data/raw/*.accdb
 data/raw/*.xlsx
+data/raw/*.xls
+data/raw/*.zip
+data/raw/*.gz
+data/raw/*.tar
+data/raw/*.7z
+data/raw/*.rar
 data/processed/
 *.parquet
+*.feather
+*.pickle
+*.pkl
 
 # Temporary files
 tmp/
