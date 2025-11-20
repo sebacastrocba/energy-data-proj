@@ -277,6 +277,48 @@ def clean_fuel_price(df: pd.DataFrame) -> pd.DataFrame:
 
     return cleaned_df
 
+@timer
+def calculate_market_share(
+    df: pd.DataFrame,
+    group_by: List[str] = ["periodo", "bandera"],
+    volume_col: str = "volumen"
+) -> pd.DataFrame:
+    """
+    Calcula el market share de cada bandera basado en volumen vendido.
+    
+    El market share representa la participación porcentual de cada bandera
+    en el volumen total de combustibles vendidos para un período dado.
+    
+    Args:
+        df: DataFrame con datos de combustibles
+        group_by: Columnas para agrupar (default: periodo y bandera)
+        volume_col: Nombre de la columna de volumen (default: 'volumen')
+        
+    Returns:
+        DataFrame con columnas originales más 'market_share_pct'
+    """
+    logger.info("Calculando market share por bandera...")
+    
+    # Validar que existan las columnas necesarias
+    required_cols = group_by + [volume_col]
+    missing_cols = set(required_cols) - set(df.columns)
+    if missing_cols:
+        raise ValueError(f"Columnas faltantes: {missing_cols}")
+    
+    # Agrupar por período (sin bandera) para obtener volumen total
+    periodo_col = group_by[0]  # Típicamente 'periodo'
+    
+    # Calcular volumen total por período
+    total_by_period = df.groupby(periodo_col)[volume_col].transform('sum')
+    
+    # Calcular market share porcentual
+    df_result = df.copy()
+    df_result['market_share_pct'] = (df[volume_col] / total_by_period) * 100
+    
+    logger.info(f"Market share calculado - {len(df_result)} registros procesados")
+    
+    return df_result
+
 
 @timer
 def fuel_price_aggs(
@@ -316,20 +358,11 @@ def fuel_price_aggs(
     return df_aggregated
 
 
-@timer
 def process_fuel_data_pipeline(
     raw_df: pd.DataFrame, save_staging: bool = True
 ) -> pd.DataFrame:
-    """
-    Pipeline completo de transformación de combustibles.
-
-    Args:
-        raw_df: DataFrame crudo
-        save_staging: Si True, guarda datos limpios en staging
-
-    Returns:
-        DataFrame transformado y agregado
-    """
+    """Pipeline completo de transformación de combustibles."""
+    
     logger.info("=" * 70)
     logger.info("INICIANDO PIPELINE DE COMBUSTIBLES")
     logger.info("=" * 70)
@@ -338,18 +371,26 @@ def process_fuel_data_pipeline(
     logger.info("\nPASO 1: Limpieza de datos")
     cleaned_df = clean_fuel_price(raw_df)
 
-    # Paso 2: Transformar
-    logger.info("\nPASO 2: Agregación de datos")
-    transformed_df = fuel_price_aggs(cleaned_df)
+    # Paso 1.5: Calcular market share por bandera
+    logger.info("\nPASO 1.5: Cálculo de market share por bandera")
+    cleaned_with_market_share = calculate_market_share(
+        cleaned_df, 
+        group_by=['periodo', 'bandera']
+    )
 
-    # Paso 3: Guardar
+    # Paso 2: Transformar (agregación mensual)
+    logger.info("\nPASO 2: Agregación de datos")
+    transformed_df = fuel_price_aggs(cleaned_df) 
+
+    # Paso 3: Guardar 
     if save_staging:
         logger.info("\nPASO 3: Guardando datos limpios en staging")
         project_root = Path(__file__).parent.parent.parent
         output_path = project_root / "data" / "processed"
-
+        
+        # Guarda la versión CON market share
         save_to_parquet(
-            cleaned_df,
+            cleaned_with_market_share,
             output_path=output_path,
             filename="fuel_price_cleaned",
         )
