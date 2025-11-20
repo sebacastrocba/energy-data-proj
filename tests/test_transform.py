@@ -10,6 +10,9 @@ from fuel_price.transform import (
     dollar_price_aggs,
 )
 
+# Agrego la nueva función
+from fuel_price.transform import calculate_market_share
+
 
 # 1. Test para verificar que agg_brent_price calcula el promedio mensual correctamente
 def test_agg_brent_price_calculates_monthly_average():
@@ -106,15 +109,10 @@ def test_dollar_price_aggs_pivots_and_calculates_brecha():
     )
 
 
-# Agrego test para la nueva función calculate_market_share
-from fuel_price.transform import calculate_market_share
-
-
 def test_calculate_market_share_basic():
     """
     Test que verifica el cálculo básico de market share.
     """
-    from fuel_price.transform import calculate_market_share
 
     # Datos de ejemplo: 3 banderas en un mismo período
     data = {
