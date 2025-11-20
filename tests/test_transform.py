@@ -27,7 +27,7 @@ def test_agg_brent_price_calculates_monthly_average():
     assert len(result) == 1
     # Verificar que el promedio es correcto
     expected_avg = 80.0  # (80+85+90+75+70)/5
-    assert np.isclose(result.iloc[0]["brent_price"], expected_avg)
+    assert np.isclose(result.iloc[0]["avg_brent_price"], expected_avg)
 
 
 # 2. Test para verificar que fuel_price_aggs agrupa y calcula medianas y sumas correctamente
