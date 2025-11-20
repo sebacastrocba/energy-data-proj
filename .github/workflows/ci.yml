@@ -63,7 +63,7 @@ jobs:
       env:
         PGPASSWORD: test_password
       run: |
-        psql -h localhost -U test_user -d fuel_price_test -f init_db/01_init_schema.sql
+        psql -h localhost -U test_user -d fuel_price_test -f sql/init.sql
     
     - name: Run tests
       env:
