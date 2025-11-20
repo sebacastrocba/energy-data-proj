@@ -105,41 +105,43 @@ def test_dollar_price_aggs_pivots_and_calculates_brecha():
         result.iloc[0]["brecha_cambiaria_pct"], expected_brecha, rtol=0.01
     )
 
+
 # Agrego test para la nueva función calculate_market_share
 from fuel_price.transform import calculate_market_share
+
 
 def test_calculate_market_share_basic():
     """
     Test que verifica el cálculo básico de market share.
     """
     from fuel_price.transform import calculate_market_share
-    
+
     # Datos de ejemplo: 3 banderas en un mismo período
     data = {
-        'periodo': pd.to_datetime(['2024-01-01', '2024-01-01', '2024-01-01']),
-        'bandera': ['YPF', 'Shell', 'Axion'],
-        'producto': ['NAFTA GRADO 2', 'NAFTA GRADO 2', 'NAFTA GRADO 2'],
-        'volumen': [1000, 500, 500]  # Total: 2000
+        "periodo": pd.to_datetime(["2024-01-01", "2024-01-01", "2024-01-01"]),
+        "bandera": ["YPF", "Shell", "Axion"],
+        "producto": ["NAFTA GRADO 2", "NAFTA GRADO 2", "NAFTA GRADO 2"],
+        "volumen": [1000, 500, 500],  # Total: 2000
     }
     df = pd.DataFrame(data)
-    
+
     # Aplicar función
-    result = calculate_market_share(df, group_by=['periodo', 'bandera'])
-    
+    result = calculate_market_share(df, group_by=["periodo", "bandera"])
+
     # Verificaciones
-    assert 'market_share_pct' in result.columns
+    assert "market_share_pct" in result.columns
     assert len(result) == 3
-    
+
     # YPF debería tener 50% (1000/2000)
-    ypf_share = result[result['bandera'] == 'YPF']['market_share_pct'].values[0]
+    ypf_share = result[result["bandera"] == "YPF"]["market_share_pct"].values[0]
     assert np.isclose(ypf_share, 50.0)
-    
+
     # Shell y Axion deberían tener 25% cada uno (500/2000)
-    shell_share = result[result['bandera'] == 'Shell']['market_share_pct'].values[0]
-    axion_share = result[result['bandera'] == 'Axion']['market_share_pct'].values[0]
+    shell_share = result[result["bandera"] == "Shell"]["market_share_pct"].values[0]
+    axion_share = result[result["bandera"] == "Axion"]["market_share_pct"].values[0]
     assert np.isclose(shell_share, 25.0)
     assert np.isclose(axion_share, 25.0)
-    
+
     # La suma de market shares debería ser 100%
-    total_share = result['market_share_pct'].sum()
+    total_share = result["market_share_pct"].sum()
     assert np.isclose(total_share, 100.0)
