@@ -61,7 +61,7 @@ def save_to_parquet(
     )
 
     logger.info(f"Datos guardados en: {file_path}")
-    
+
     # Mostrar tamaño en unidad apropiada
     size_bytes = file_path.stat().st_size
     if size_bytes < 1024 * 1024:  # Menor a 1 MB
@@ -223,7 +223,9 @@ def clean_fuel_price(df: pd.DataFrame) -> pd.DataFrame:
         logger.info(
             f"  Filtrados {date_filtered:,} registros anteriores a {START_DATE_FUEL_PRICE}"
         )
-    logger.info(f"  Rango de fechas después del filtro: {cleaned_df['periodo'].min().date()} a {cleaned_df['periodo'].max().date()}")
+    min_date = cleaned_df["periodo"].min().date()
+    max_date = cleaned_df["periodo"].max().date()
+    logger.info(f"  Rango de fechas después del filtro: {min_date} a {max_date}")
 
     # Limpieza
     before_cleaning = len(cleaned_df)

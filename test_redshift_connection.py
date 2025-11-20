@@ -20,44 +20,48 @@ if not conn_str:
     exit(1)
 
 print("Intentando conectar a Redshift...")
-print(f"Connection string (ofuscada): postgresql://***:***@{conn_str.split('@')[1] if '@' in conn_str else '???'}")
+print(
+    f"Connection string (ofuscada): postgresql://***:***@{conn_str.split('@')[1] if '@' in conn_str else '???'}"
+)
 
 try:
     # Intentar conexión
     conn = psycopg2.connect(conn_str)
     cursor = conn.cursor()
-    
+
     # Ejecutar query simple
     cursor.execute("SELECT version();")
     version = cursor.fetchone()
-    
+
     print("\n✓ CONEXIÓN EXITOSA!")
     print(f"✓ Versión de Redshift: {version[0][:80]}...")
-    
+
     # Listar bases de datos
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT datname 
         FROM pg_database 
         WHERE datistemplate = false;
-    """)
+    """
+    )
     databases = cursor.fetchall()
-    
+
     print(f"\n✓ Bases de datos disponibles:")
     for db in databases:
         print(f"  - {db[0]}")
-    
+
     cursor.close()
     conn.close()
-    
-    print("\n" + "="*70)
+
+    print("\n" + "=" * 70)
     print("TODO OK - Podés continuar con el Paso 2")
-    print("="*70)
+    print("=" * 70)
 
 except Exception as e:
     print("\n✗ ERROR AL CONECTAR")
-    print("="*70)
+    print("=" * 70)
     print(f"Error: {str(e)}")
-    print("="*70)
+    print("=" * 70)
     print("\nPosibles causas:")
     print("1. Connection string incorrecta en .env")
     print("2. Cluster apagado o pausado")

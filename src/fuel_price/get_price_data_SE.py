@@ -394,9 +394,7 @@ def main():
     print("Datos actuales (2025+): SE DESCARGARAN")
 
     # Solo descargar datos de 2025+
-    urls = {
-        "2025_plus": INCREMENTAL_URL
-    }
+    urls = {"2025_plus": INCREMENTAL_URL}
 
     # 3. Descargar y extraer archivos segun decision
     print("\n" + "=" * 70)
@@ -430,7 +428,6 @@ def main():
     concatenated_file = concatenate_csv_files(all_csv_files, data_path)
 
     # 6. Filtro por fechas:
-
 
     # 6. Resumen final
     print("\n" + "=" * 70)
