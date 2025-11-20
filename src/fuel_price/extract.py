@@ -241,7 +241,7 @@ def extract_fuel_prices(
 
 
 def extract_all_data(
-    brent_start_date: str = "2022-01-01",
+    brent_start_date: str = START_DATE_BRENT,
     brent_end_date: Optional[str] = None,
     fuel_data_path: Optional[Path] = None,
     update_all: bool = True,
@@ -255,7 +255,7 @@ def extract_all_data(
     3. USD/ARS (Bluelytics) - Cotización oficial + blue
 
     Args:
-        brent_start_date: Fecha inicio Brent (default: "2022-01-01")
+        brent_start_date: Fecha inicio Brent (default: "2024-01-01")
         brent_end_date: Fecha fin Brent (default: hoy)
         fuel_data_path: Path combustibles (default: data/raw)
         update_all: Si True, actualiza todo (default: True)
@@ -298,7 +298,7 @@ def extract_all_data(
     print("3. EXTRAYENDO COTIZACIÓN USD/ARS")
     print("-" * 70)
     dolar_data = extract_dolar_bluelytics(
-        start_date=brent_start_date,
+        start_date=START_DATE_DOLLAR,
         end_date=brent_end_date,
         tipos=["oficial", "blue"],
         output_path=fuel_data_path,

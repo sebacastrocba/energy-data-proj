@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Tuple, Callable
 from functools import wraps
 import time
 import logging
-from fuel_price.config import PRODUCTO_MAP, COLUMNAS_RELEVANTES
+from fuel_price.config import PRODUCTO_MAP, COLUMNAS_RELEVANTES, START_DATE_FUEL_PRICE
 
 # Configurar logging
 logging.basicConfig(
@@ -61,7 +61,15 @@ def save_to_parquet(
     )
 
     logger.info(f"Datos guardados en: {file_path}")
-    logger.info(f"Tamaño: {file_path.stat().st_size / 1024 / 1024:.2f} MB")
+    
+    # Mostrar tamaño en unidad apropiada
+    size_bytes = file_path.stat().st_size
+    if size_bytes < 1024 * 1024:  # Menor a 1 MB
+        size_kb = size_bytes / 1024
+        logger.info(f"Tamaño: {size_kb:.2f} KB")
+    else:
+        size_mb = size_bytes / 1024 / 1024
+        logger.info(f"Tamaño: {size_mb:.2f} MB")
 
     return file_path
 
@@ -205,6 +213,17 @@ def clean_fuel_price(df: pd.DataFrame) -> pd.DataFrame:
     cleaned_df["precio_surtidor"] = pd.to_numeric(
         cleaned_df["precio_surtidor"], errors="coerce"
     )
+
+    # Filtrar por fecha mínima (después de convertir periodo a datetime)
+    before_date_filter = len(cleaned_df)
+    start_date = pd.to_datetime(START_DATE_FUEL_PRICE)
+    cleaned_df = cleaned_df[cleaned_df["periodo"] >= start_date]
+    date_filtered = before_date_filter - len(cleaned_df)
+    if date_filtered > 0:
+        logger.info(
+            f"  Filtrados {date_filtered:,} registros anteriores a {START_DATE_FUEL_PRICE}"
+        )
+    logger.info(f"  Rango de fechas después del filtro: {cleaned_df['periodo'].min().date()} a {cleaned_df['periodo'].max().date()}")
 
     # Limpieza
     before_cleaning = len(cleaned_df)

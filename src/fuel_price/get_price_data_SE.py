@@ -9,6 +9,7 @@ import io
 import sys
 import subprocess
 import shutil
+from config import START_DATE_FUEL_PRICE
 
 
 def check_mdbtools_installed():
@@ -16,62 +17,18 @@ def check_mdbtools_installed():
     return shutil.which("mdb-export") is not None
 
 
-def check_historical_data_exists(data_path):
-    """
-    Verifica si los datos historicos (2022-2024) ya estan descargados y son validos.
-
-    Args:
-        data_path: Directorio donde se guardan los datos
-
-    Returns:
-        True si los datos historicos existen y son validos (podemos usar cache)
-        False si hay que descargarlos de nuevo
-    """
-    print("\nVerificando datos historicos en cache...")
-    print("-" * 70)
-
-    # Buscar archivos CSV historicos usando patron de nombre
-    csv_files = list(data_path.glob("*2022_2024*public*.csv"))
-
-    if not csv_files:
-        # No encontramos ningun archivo, hay que descargar
-        print("No se encontraron datos historicos (2022-2024) en cache")
-        print("Se descargaran datos completos")
-        print("-" * 70)
-        return False
-
-    # Tomamos el primer archivo encontrado (normalmente hay solo uno)
-    csv_file = csv_files[0]
-    print(f"Archivo encontrado: {csv_file.name}")
-
-    # Validar que el archivo tenga contenido (no este vacio)
-    try:
-        file_size = csv_file.stat().st_size
-
-        if file_size == 0:
-            print("Archivo existe pero esta vacio")
-            print("Se redescargaran los datos historicos")
-            print("-" * 70)
-            return False
-
-        # Intentar leer las primeras 5 lineas para verificar que es un CSV valido
-        df = pd.read_csv(csv_file, nrows=5)
-
-        if len(df) == 0:
-            print("Archivo no contiene datos")
-            print("Se redescargaran los datos historicos")
-            print("-" * 70)
-            return False
-
-        print("\nCache valido. Se omitira descarga de datos historicos")
-        print("-" * 70)
-        return True
-
-    except Exception as e:
-        print(f"Error al validar archivo: {e}")
-        print("Se redescargaran los datos historicos por seguridad")
-        print("-" * 70)
-        return False
+# NOTA: Función deshabilitada - datos de 2022-2024 no disponibles (archivo Access corrupto/vacío)
+# def check_historical_data_exists(data_path):
+#     """
+#     Verifica si los datos historicos (2022-2024) ya estan descargados y son validos.
+#     """
+#     print("\nVerificando datos historicos en cache...")
+#     print("-" * 70)
+#     csv_files = list(data_path.glob("*2022_2024*public*.csv"))
+#     if not csv_files:
+#         print("No se encontraron datos historicos (2022-2024) en cache")
+#         return False
+#     return True
 
 
 def download_and_extract_access_files(
@@ -399,9 +356,9 @@ def main():
     print("=" * 70)
 
     # Definir las URLs de las fuentes de datos
-    # STATIC: Datos historicos que no cambian (2022-2024)
-    # INCREMENTAL: Datos actuales que se actualizan continuamente (2025+)
-    STATIC_URL = "http://res1104.se.gob.ar/adjuntos/precios_eess_2022_2024.zip"
+    # NOTA: El archivo de 2022-2024 está corrupto/vacío (no tiene tablas legibles con mdb-tools)
+    # Por ahora solo descargamos datos de 2025+
+    # STATIC_URL = "http://res1104.se.gob.ar/adjuntos/precios_eess_2022_2024.zip"  # DESHABILITADO
     INCREMENTAL_URL = (
         "http://res1104.se.gob.ar/adjuntos/precios_eess_2025_en_adelante.zip"
     )
@@ -427,34 +384,19 @@ def main():
         print("  macOS: brew install mdbtools")
         return 1
 
-    # 2. Verificar datos historicos en cache
+    # 2. Configurar descarga (solo 2025+)
     print("\n" + "=" * 70)
     print("DECISION AUTOMATICA DE DESCARGA")
     print("=" * 70)
 
-    historical_exists = check_historical_data_exists(data_path)
+    print("\nMODO: SOLO DATOS 2025+")
+    print("Nota: Archivo de 2022-2024 está corrupto/vacío - omitido")
+    print("Datos actuales (2025+): SE DESCARGARAN")
 
-    # Construir diccionario de URLs a descargar segun la decision
-    urls = {}
-
-    if historical_exists:
-        print("\nMODO: ACTUALIZACION INCREMENTAL")
-        print("Datos historicos (2022-2024): CACHE (no se descargaran)")
-        print("Datos actuales (2025+): SE DESCARGARAN")
-
-        # Solo agregar URL de datos actuales
-        urls["2025_plus"] = INCREMENTAL_URL
-
-    else:
-        print("\nMODO: DESCARGA COMPLETA")
-        print("Datos historicos (2022-2024): SE DESCARGARAN")
-        print("Datos actuales (2025+): SE DESCARGARAN")
-        print("\nEsta es probablemente la primera ejecucion o los datos previos")
-        print("no son validos. Se descargaran datos completos.")
-
-        # Agregar ambas URLs
-        urls["2022_2024"] = STATIC_URL
-        urls["2025_plus"] = INCREMENTAL_URL
+    # Solo descargar datos de 2025+
+    urls = {
+        "2025_plus": INCREMENTAL_URL
+    }
 
     # 3. Descargar y extraer archivos segun decision
     print("\n" + "=" * 70)
@@ -486,6 +428,9 @@ def main():
 
     # 5. Concatenar todos los CSV en un archivo completo
     concatenated_file = concatenate_csv_files(all_csv_files, data_path)
+
+    # 6. Filtro por fechas:
+
 
     # 6. Resumen final
     print("\n" + "=" * 70)

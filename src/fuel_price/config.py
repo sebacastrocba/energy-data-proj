@@ -1,8 +1,11 @@
 import numpy as np
 
 # Extract config
-START_DATE_BRENT = "2024-01-01"
-START_DATE_DOLLAR = "2024-01-01"
+# NOTA: El archivo Access de 2022-2024 está corrupto/vacío y no puede ser leído por mdb-tools
+# Por ahora solo tenemos datos disponibles desde 2025-01-01
+START_DATE_BRENT = "2025-01-01"
+START_DATE_DOLLAR = "2025-01-01"
+START_DATE_FUEL_PRICE = "2025-01-01"
 END_DATE_BRENT = None
 
 # Mapping de nombres de productos a nombres estandarizados SE
