@@ -27,6 +27,14 @@ Este proyecto implementa un pipeline de datos (ETL) completo que extrae, transfo
 - ✅ **Gestión de dependencias** con Poetry
 - ✅ **Context managers** para manejo seguro de conexiones DB
 
+## Pull Request
+
+Esta PR realiza los siguientes cambios principales:
+
+- Agrega la función `calculate_market_share()` para calcular la participación de mercado por volumen por marca.
+- Añade un test unitario que verifica el cálculo del market share.
+- Integra la métrica de market share en el pipeline de precios de combustibles (solo en datos limpios/staging).
+
 ## 🚀 Inicio Rápido
 
 ### Requisitos Previos
