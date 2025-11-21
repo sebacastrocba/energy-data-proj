@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS staging.fuel_prices (
     producto VARCHAR(100) NOT NULL,
     precio_surtidor NUMERIC(10, 2) NOT NULL,
     volumen NUMERIC(15, 2),
+    market_share_pct NUMERIC(10, 4),
     load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fuel_price_positive CHECK (precio_surtidor > 0)
 );

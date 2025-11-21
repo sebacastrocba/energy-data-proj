@@ -1,8 +1,5 @@
 version: '3.8'
 
-# ==================================================
-# Configuración compartida de Airflow
-# ==================================================
 x-airflow-common:
   &airflow-common
   build:
@@ -16,13 +13,11 @@ x-airflow-common:
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
-    # Variables para que Airflow acceda a PostgreSQL del ETL
     POSTGRES_HOST: postgres-etl
     POSTGRES_PORT: 5432
     POSTGRES_DB: ${POSTGRES_DB:-fuel_prices_db}
     POSTGRES_USER: ${POSTGRES_USER:-fuel_user}
     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fuel_password}
-    # PYTHONPATH para imports del paquete fuel_price
     PYTHONPATH: /opt/airflow/src
   volumes:
     - ./dags:/opt/airflow/dags
@@ -35,11 +30,10 @@ x-airflow-common:
     &airflow-common-depends-on
     postgres-airflow:
       condition: service_healthy
+  networks:
+    - etl_network
 
 services:
-  # ==================================================
-  # PostgreSQL - Base de datos del ETL
-  # ==================================================
   postgres-etl:
     image: postgres:15-alpine
     container_name: fuel_prices_postgres
@@ -48,7 +42,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fuel_password}
       POSTGRES_DB: ${POSTGRES_DB:-fuel_prices_db}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d
@@ -58,10 +52,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - etl_network
 
-  # ==================================================
-  # PostgreSQL - Metadata de Airflow
-  # ==================================================
   postgres-airflow:
     image: postgres:15-alpine
     container_name: airflow_postgres
@@ -77,10 +70,9 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    networks:
+      - etl_network
 
-  # ==================================================
-  # Airflow - Webserver (UI)
-  # ==================================================
   airflow-webserver:
     <<: *airflow-common
     command: webserver
@@ -99,9 +91,6 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-  # ==================================================
-  # Airflow - Scheduler 
-  # ==================================================
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
@@ -118,9 +107,6 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-  # ==================================================
-  # Airflow - Init
-  # ==================================================
   airflow-init:
     <<: *airflow-common
     container_name: airflow_init
@@ -144,3 +130,7 @@ services:
 volumes:
   postgres_data:
   postgres_airflow_data:
+
+networks:
+  etl_network:
+    driver: bridge
